@@ -1,0 +1,31 @@
+day,heart_rate,bp_sys,bp_dia,spo2,sleep_hours,radiation_msv,mood_score,status,mission_notes
+1,71,117,80,99.3,7.1,0.438,4,NOMINAL,Routine Operations
+2,71,123,75,98.2,6.9,0.404,5,NOMINAL,Routine Operations
+3,63,115,73,98.7,6.7,0.379,5,NOMINAL,Routine Operations
+4,67,120,88,98.7,7.3,0.424,4,NOMINAL,Routine Operations
+5,67,116,75,99.4,7.2,0.397,4,NOMINAL,Routine Operations
+6,69,119,72,99.0,8.9,0.51,4,NOMINAL,Routine Operations
+7,72,118,77,98.3,6.3,0.414,5,NOMINAL,Routine Operations
+8,64,113,73,98.6,7.5,0.494,5,NOMINAL,Routine Operations
+9,66,116,79,99.0,6.9,0.441,5,NOMINAL,Routine Operations
+10,74,113,81,98.6,6.6,0.446,5,NOMINAL,Routine Operations
+11,71,125,77,99.3,5.6,0.491,4,NOMINAL,Routine Operations
+12,64,123,81,98.5,6.9,0.375,5,NOMINAL,Routine Operations
+13,66,115,81,98.7,6.9,0.476,5,NOMINAL,Routine Operations
+14,75,118,76,98.8,7.0,0.432,5,NOMINAL,Routine Operations
+15,71,119,78,98.4,6.4,0.429,4,NOMINAL,Routine Operations
+16,71,117,78,97.5,6.6,0.52,5,NOMINAL,Routine Operations
+17,62,117,78,99.7,7.1,0.465,4,NOMINAL,Routine Operations
+18,71,117,81,97.9,6.7,0.489,5,NOMINAL,Routine Operations
+19,116,133,94,95.0,3.3,25.37,1,CRITICAL,Solar Particle Event (SPE) Alert
+20,108,138,85,93.3,3.3,27.45,1,CRITICAL,Solar Particle Event (SPE) Alert
+21,102,151,88,92.9,4.2,24.04,1,CRITICAL,Solar Particle Event (SPE) Alert
+22,78,129,77,97.9,6.9,0.613,3,NOMINAL,Countermeasure Recovery Phase
+23,83,120,83,98.3,6.9,0.618,3,NOMINAL,Countermeasure Recovery Phase
+24,79,121,87,98.0,6.2,0.603,4,NOMINAL,Countermeasure Recovery Phase
+25,74,119,84,98.3,7.0,0.625,4,NOMINAL,Countermeasure Recovery Phase
+26,77,120,79,97.5,6.8,0.577,4,NOMINAL,Countermeasure Recovery Phase
+27,82,126,90,97.8,6.1,0.547,4,NOMINAL,Countermeasure Recovery Phase
+28,73,125,81,98.1,7.0,0.544,4,NOMINAL,Countermeasure Recovery Phase
+29,76,127,85,97.7,6.3,0.509,4,NOMINAL,Countermeasure Recovery Phase
+30,78,125,79,97.9,6.8,0.459,4,NOMINAL,Countermeasure Recovery Phase

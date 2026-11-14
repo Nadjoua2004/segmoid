@@ -1,0 +1,42 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #030712;
+  --foreground: #f8fafc;
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  overflow-x: hidden;
+}
+
+/* Aerospace Grid Background Pattern */
+.aerospace-grid {
+  background-image: 
+    linear-gradient(to right, rgba(31, 41, 55, 0.25) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(31, 41, 55, 0.25) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* Custom Scrollbar for Flight Telemetry */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0b0f19;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1f2937;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #00f0ff;
+}
