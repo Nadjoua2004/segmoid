@@ -1,12 +1,12 @@
 /**
  * Aegis-Bio API Client
- * Typed HTTP methods for FastAPI backend communication with fallback resilience.
+ * Typed HTTP methods for FastAPI backend communication.
  */
 import {
+  CrewMember,
+  WeeklyTelemetryResponse,
+  PredictorResponse,
   HealthMetrics,
-  HealthMetricsResponse,
-  TriageResult,
-  PredictionResult,
   EmergencyAlert,
   EmergencyAckRequest,
   ChatMessage,
@@ -34,43 +34,27 @@ async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  // Telemetry Metrics
-  async getMetricsHistory(astronautId = "ASTRO-7702-HELENA", limit = 30): Promise<HealthMetricsResponse[]> {
-    return request<HealthMetricsResponse[]>(`/api/metrics/history?astronaut_id=${astronautId}&limit=${limit}`);
+  // -------------------------------------------------------------
+  // OpenTelemetry Weekly Pipeline & Telemetry
+  // -------------------------------------------------------------
+  async getCrewMembers(): Promise<{ crew: CrewMember[]; count: number }> {
+    return request<{ crew: CrewMember[]; count: number }>("/api/otel/crew");
   },
 
-  async getLatestMetrics(astronautId = "ASTRO-7702-HELENA"): Promise<HealthMetricsResponse> {
-    return request<HealthMetricsResponse>(`/api/metrics/latest?astronaut_id=${astronautId}`);
+  async getWeeklyTelemetry(astronautId: string = "ASTRO-01", weekNumber: number = 1): Promise<WeeklyTelemetryResponse> {
+    return request<WeeklyTelemetryResponse>(`/api/otel/week/${astronautId}/${weekNumber}`);
   },
 
-  async ingestMetrics(payload: HealthMetrics): Promise<HealthMetricsResponse> {
-    return request<HealthMetricsResponse>("/api/metrics/ingest", {
-      method: "POST",
-      body: JSON.stringify(payload),
-    });
-  },
-
-  // Triage & Spaceflight Hazard Classification
-  async getCurrentTriage(astronautId = "ASTRO-7702-HELENA"): Promise<TriageResult> {
-    return request<TriageResult>(`/api/triage/current?astronaut_id=${astronautId}`);
-  },
-
-  async classifyTriage(metrics: HealthMetrics): Promise<TriageResult> {
-    return request<TriageResult>("/api/triage/classify", {
-      method: "POST",
-      body: JSON.stringify(metrics),
-    });
-  },
-
-  // 7-Day Trajectory Forecasting
-  async getPredictedTrajectory(astronautId = "ASTRO-7702-HELENA", horizonDays = 7): Promise<PredictionResult> {
-    return request<PredictionResult>(`/api/predict/trajectory?astronaut_id=${astronautId}&horizon_days=${horizonDays}`, {
+  async predictUpcomingHealth(astronautId: string = "ASTRO-01", weekNumber: number = 1, forecastDays: number = 7): Promise<PredictorResponse> {
+    return request<PredictorResponse>(`/api/otel/predict?astronaut_id=${astronautId}&week_number=${weekNumber}&forecast_days=${forecastDays}`, {
       method: "POST",
     });
   },
 
-  // Intra-Crew Emergency Protocol
-  async getEmergencyStatus(astronautId = "ASTRO-7702-HELENA"): Promise<EmergencyAlert | null> {
+  // -------------------------------------------------------------
+  // Emergency Protocol & RAG Agent
+  // -------------------------------------------------------------
+  async getEmergencyStatus(astronautId: string = "ASTRO-01"): Promise<EmergencyAlert | null> {
     return request<EmergencyAlert | null>(`/api/emergency/status?astronaut_id=${astronautId}`);
   },
 
@@ -87,8 +71,7 @@ export const api = {
     });
   },
 
-  // AI Clinical Flight Surgeon
-  async queryFlightSurgeon(query: string, astronautId = "ASTRO-7702-HELENA"): Promise<ChatMessage> {
+  async queryFlightSurgeon(query: string, astronautId: string = "ASTRO-01"): Promise<ChatMessage> {
     return request<ChatMessage>("/api/chat/query", {
       method: "POST",
       body: JSON.stringify({
@@ -99,9 +82,16 @@ export const api = {
     });
   },
 
-  async getProactiveChat(astronautId = "ASTRO-7702-HELENA"): Promise<ProactiveChatPayload> {
+  async getProactiveChat(astronautId: string = "ASTRO-01"): Promise<ProactiveChatPayload> {
     return request<ProactiveChatPayload>(`/api/chat/proactive?astronaut_id=${astronautId}`, {
       method: "POST",
+    });
+  },
+
+  async ingestMetrics(payload: HealthMetrics): Promise<any> {
+    return request<any>("/api/metrics/ingest", {
+      method: "POST",
+      body: JSON.stringify(payload),
     });
   },
 };

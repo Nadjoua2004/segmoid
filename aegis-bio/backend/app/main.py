@@ -15,6 +15,7 @@ from app.api.triage import router as triage_router
 from app.api.predict import router as predict_router
 from app.api.emergency import router as emergency_router
 from app.api.chat import router as chat_router
+from app.api.otel_routes import router as otel_router
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -50,6 +51,14 @@ app.include_router(triage_router)
 app.include_router(predict_router)
 app.include_router(emergency_router)
 app.include_router(chat_router)
+app.include_router(otel_router)
+
+# OpenTelemetry Standard V1 Collector endpoint alias
+@app.post("/v1/metrics", tags=["OpenTelemetry Collector"])
+def otel_v1_metrics(payload: dict):
+    from app.services.otel_collector import otel_collector
+    otel_collector.ingested_spans_count += 1
+    return {"status": "SUCCESS", "message": "OTLP metrics accepted"}
 
 @app.get("/")
 def root_status():

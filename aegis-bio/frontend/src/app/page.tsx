@@ -2,174 +2,200 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import {
-  Heart,
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  AreaChart,
+  Area,
+  BarChart,
+  Bar,
+  PieChart,
+  Pie,
+  Cell,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+} from "recharts";
+import {
   Activity,
-  ShieldAlert,
+  Heart,
+  Shield,
   Moon,
   Radio,
-  Thermometer,
-  Bot,
-  PlusCircle,
-  RefreshCw,
-  AlertTriangle,
-  FileText,
-  Clock,
-  Compass,
+  Cpu,
+  TrendingUp,
+  AlertOctagon,
+  ChevronLeft,
+  ChevronRight,
+  User,
   Zap,
+  RefreshCw,
+  Wind,
 } from "lucide-react";
 
 import {
-  HealthMetricsResponse,
-  TriageResult,
-  PredictionResult,
+  CrewMember,
+  WeeklyTelemetryResponse,
+  PredictorResponse,
   EmergencyAlert,
-  HealthMetrics,
 } from "@/lib/types";
 import { api } from "@/lib/api";
-
-import { TelemetryCard } from "@/components/TelemetryCard";
-import { VitalsChart } from "@/components/VitalsChart";
-import { DailyCheckInModal } from "@/components/DailyCheckInModal";
-import { ProactiveChatDrawer } from "@/components/ProactiveChatDrawer";
 import { EmergencyBanner } from "@/components/EmergencyBanner";
+import { ProactiveChatDrawer } from "@/components/ProactiveChatDrawer";
 
 export default function MissionDashboard() {
-  const [history, setHistory] = useState<HealthMetricsResponse[]>([]);
-  const [latestMetrics, setLatestMetrics] = useState<HealthMetricsResponse | null>(null);
-  const [triage, setTriage] = useState<TriageResult | null>(null);
-  const [prediction, setPrediction] = useState<PredictionResult | null>(null);
+  const [crew, setCrew] = useState<CrewMember[]>([]);
+  const [selectedAstronautId, setSelectedAstronautId] = useState<string>("ASTRO-01");
+  const [currentWeek, setCurrentWeek] = useState<number>(1);
+  const [weeklyData, setWeeklyData] = useState<WeeklyTelemetryResponse | null>(null);
+  const [prediction, setPrediction] = useState<PredictorResponse | null>(null);
   const [emergencyAlert, setEmergencyAlert] = useState<EmergencyAlert | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
 
-  const [isLoading, setIsLoading] = useState(true);
-  const [isCheckInOpen, setIsCheckInOpen] = useState(false);
-  const [isChatOpen, setIsChatOpen] = useState(false);
+  // Load crew list once on mount
+  useEffect(() => {
+    api
+      .getCrewMembers()
+      .then((res) => {
+        if (res.crew && res.crew.length > 0) {
+          setCrew(res.crew);
+        }
+      })
+      .catch((err) => console.error("Crew load failed:", err));
+  }, []);
 
-  const loadDashboardData = useCallback(async () => {
+  // Fetch weekly telemetry and run predictor agent
+  const loadWeekData = useCallback(async () => {
     setIsLoading(true);
     try {
-      // 1. Fetch History
-      const histData = await api.getMetricsHistory();
-      setHistory(histData);
-
-      // 2. Fetch Latest Metrics
-      if (histData.length > 0) {
-        setLatestMetrics(histData[histData.length - 1]);
-      }
-
-      // 3. Fetch Triage Assessment
-      const triageData = await api.getCurrentTriage();
-      setTriage(triageData);
-
-      // 4. Fetch 7-Day Forecast Trajectory
-      const predData = await api.getPredictedTrajectory();
-      setPrediction(predData);
-
-      // 5. Fetch Emergency Status
-      const emerData = await api.getEmergencyStatus();
-      setEmergencyAlert(emerData);
+      const [telemetryRes, predRes, emerRes] = await Promise.all([
+        api.getWeeklyTelemetry(selectedAstronautId, currentWeek),
+        api.predictUpcomingHealth(selectedAstronautId, currentWeek, 7),
+        api.getEmergencyStatus(selectedAstronautId),
+      ]);
+      setWeeklyData(telemetryRes);
+      setPrediction(predRes);
+      setEmergencyAlert(emerRes);
     } catch (err) {
-      console.error("Dashboard data load error:", err);
+      console.error("Failed to load telemetry:", err);
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [selectedAstronautId, currentWeek]);
 
   useEffect(() => {
-    loadDashboardData();
-  }, [loadDashboardData]);
+    loadWeekData();
+  }, [loadWeekData]);
 
-  // Handle astronaut daily check-in submission
-  const handleCheckInSubmit = async (payload: HealthMetrics) => {
-    await api.ingestMetrics(payload);
-    await loadDashboardData();
+  const handlePrevWeek = () => {
+    if (currentWeek > 1) setCurrentWeek((w) => w - 1);
   };
 
-  // Handle intra-crew emergency acknowledgment
+  const handleNextWeek = () => {
+    const maxWeeks = weeklyData?.astronaut.max_available_weeks || 25;
+    if (currentWeek < maxWeeks) setCurrentWeek((w) => w + 1);
+  };
+
   const handleEmergencyAck = async (alertId: string, callsign: string) => {
     await api.acknowledgeEmergency({ alert_id: alertId, crew_member_callsign: callsign });
-    const updated = await api.getEmergencyStatus();
+    const updated = await api.getEmergencyStatus(selectedAstronautId);
     setEmergencyAlert(updated);
   };
 
-  // Handle emergency simulation drill
   const handleTriggerDrill = async () => {
-    const drillAlert = await api.triggerEmergencyDrill();
-    setEmergencyAlert(drillAlert);
+    const drill = await api.triggerEmergencyDrill();
+    setEmergencyAlert(drill);
   };
 
-  const currentMissionDay = latestMetrics ? latestMetrics.mission_day : 30;
-
-  // Generate sparkline values for core cards
-  const hrSparkline = history.slice(-8).map((h) => ({ val: h.heart_rate }));
-  const spo2Sparkline = history.slice(-8).map((h) => ({ val: h.spo2 }));
-  const radSparkline = history.slice(-8).map((h) => ({ val: h.radiation_msv }));
-  const sleepSparkline = history.slice(-8).map((h) => ({ val: h.sleep_hours }));
+  const kpis = weeklyData?.summary_kpis;
+  const astro = weeklyData?.astronaut;
+  const maxWeeks = astro?.max_available_weeks || 25;
 
   return (
-    <div className="min-h-screen text-slate-100 pb-16">
+    <div className="min-h-screen bg-space-950 text-slate-100 font-mono pb-12 selection:bg-cyan-500 selection:text-black">
       {/* -------------------------------------------------------------
-          TOP AEROSPACE COCKPIT BAR
+          TOP AEROSPACE COCKPIT BAR (MINIMAL)
       -------------------------------------------------------------- */}
-      <header className="sticky top-0 z-40 border-b border-cyan-900/50 bg-space-950/90 backdrop-blur-md px-4 lg:px-8 py-3">
+      <header className="sticky top-0 z-40 border-b border-slate-800 bg-space-950/95 backdrop-blur-md px-4 lg:px-6 py-2.5">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-          {/* Project Title & Mission Breadcrumb */}
+          {/* Logo & Subsystem Header */}
           <div className="flex items-center space-x-3">
-            <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-cyan-950 border border-cyan-500/60 shadow-[0_0_15px_rgba(0,240,255,0.4)]">
-              <Zap className="w-5 h-5 text-hud-cyan animate-pulse" />
+            <div className="flex items-center justify-center w-7 h-7 rounded bg-cyan-950 border border-cyan-500/80 text-hud-cyan shadow-[0_0_12px_rgba(0,240,255,0.4)]">
+              <Zap className="w-4 h-4 animate-pulse" />
             </div>
-            <div>
-              <div className="flex items-center space-x-2">
-                <h1 className="text-base font-mono font-bold tracking-wider text-white">
-                  AEGIS-BIO
-                </h1>
-                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-900/50 text-hud-cyan border border-cyan-700/60 uppercase">
-                  Flight Surgeon Core v1.0
-                </span>
-                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
-                  Team Sigmoid
-                </span>
-              </div>
-              <p className="text-xs font-mono text-slate-400">
-                Artemis Base Alpha • Astronaut Helena [ASTRO-7702] • Sol {currentMissionDay}
-              </p>
+            <div className="flex items-center space-x-2">
+              <span className="font-bold tracking-wider text-sm text-white">AEGIS-BIO</span>
+              <span className="text-[10px] text-slate-500">|</span>
+              <span className="text-[11px] text-slate-400">TELEMETRY COCKPIT</span>
+              {/* OpenTelemetry status pill */}
+              <span className="inline-flex items-center space-x-1 px-1.5 py-0.5 rounded text-[10px] bg-slate-900 border border-cyan-800/80 text-hud-cyan">
+                <Radio className="w-2.5 h-2.5 animate-pulse text-hud-cyan" />
+                <span>OTEL v1.2</span>
+              </span>
             </div>
           </div>
 
-          {/* Deep Space Comm Delay & Action Controls */}
-          <div className="flex items-center flex-wrap gap-2.5">
-            {/* 18.5 Min Comm Delay Badge */}
-            <div className="flex items-center space-x-2 px-3 py-1.5 rounded-lg bg-space-900 border border-amber-800/60 text-amber-300 text-xs font-mono">
-              <Radio className="w-3.5 h-3.5 text-hud-amber animate-pulse" />
-              <span>Latency: 18.5 min to MCC</span>
-              <span className="text-[10px] text-slate-400 border-l border-amber-900/60 pl-1.5">
-                AUTONOMOUS MODE
-              </span>
+          {/* Controls: Astronaut & Weekly Cycle Selector */}
+          <div className="flex items-center flex-wrap gap-2">
+            {/* Astronaut Selector */}
+            <div className="flex items-center space-x-1.5 px-2 py-1 rounded bg-space-900 border border-slate-800 text-xs">
+              <User className="w-3.5 h-3.5 text-slate-400" />
+              <select
+                value={selectedAstronautId}
+                onChange={(e) => setSelectedAstronautId(e.target.value)}
+                className="bg-transparent text-white font-mono text-xs focus:outline-none cursor-pointer"
+              >
+                {crew.map((c) => (
+                  <option key={c.id} value={c.id} className="bg-space-900 text-white">
+                    {c.id} • {c.name} ({c.age}{c.sex})
+                  </option>
+                ))}
+              </select>
             </div>
 
-            {/* Daily Check-in Button */}
-            <button
-              onClick={() => setIsCheckInOpen(true)}
-              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-mono font-bold uppercase tracking-wider transition-all shadow-[0_0_15px_rgba(0,240,255,0.25)]"
-            >
-              <PlusCircle className="w-3.5 h-3.5" />
-              <span>Log Check-in</span>
-            </button>
+            {/* Weekly Sliding Window Selector */}
+            <div className="flex items-center rounded bg-space-900 border border-slate-800 text-xs">
+              <button
+                onClick={handlePrevWeek}
+                disabled={currentWeek <= 1}
+                className="p-1.5 text-slate-400 hover:text-white disabled:opacity-30 transition-colors"
+                title="Previous Week"
+              >
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <div className="px-2.5 py-1 text-center min-w-[130px] border-x border-slate-800">
+                <span className="text-hud-cyan font-bold">WEEK {currentWeek}</span>
+                <span className="text-slate-500 text-[10px] block">
+                  Sol {astro?.start_sol || 1} – {astro?.end_sol || 7} (7-Day Reset)
+                </span>
+              </div>
+              <button
+                onClick={handleNextWeek}
+                disabled={currentWeek >= maxWeeks}
+                className="p-1.5 text-slate-400 hover:text-white disabled:opacity-30 transition-colors"
+                title="Next Week"
+              >
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
 
-            {/* AI Flight Surgeon Drawer Toggle */}
+            {/* AI Clinical Agent Drawer Button */}
             <button
               onClick={() => setIsChatOpen(true)}
-              className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-space-850 hover:bg-space-800 border border-cyan-800/70 text-hud-cyan text-xs font-mono font-bold uppercase tracking-wider transition-all"
+              className="flex items-center space-x-1 px-2.5 py-1 rounded bg-cyan-950 hover:bg-cyan-900 text-hud-cyan border border-cyan-700/60 text-xs font-bold transition-colors"
             >
-              <Bot className="w-3.5 h-3.5" />
-              <span>AI Surgeon (RAG)</span>
+              <Cpu className="w-3.5 h-3.5" />
+              <span>AGENT</span>
             </button>
 
-            {/* Refresh Button */}
+            {/* Refresh */}
             <button
-              onClick={loadDashboardData}
+              onClick={loadWeekData}
               disabled={isLoading}
-              title="Refresh telemetry"
-              className="p-2 rounded-lg bg-space-900 hover:bg-space-850 border border-slate-700 text-slate-300 hover:text-white transition-colors"
+              className="p-1.5 rounded bg-space-900 hover:bg-space-850 border border-slate-800 text-slate-300 hover:text-white transition-colors"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? "animate-spin" : ""}`} />
             </button>
@@ -178,10 +204,10 @@ export default function MissionDashboard() {
       </header>
 
       {/* -------------------------------------------------------------
-          MAIN CONTENT CONTAINER
+          MAIN TELEMETRY WORKSPACE
       -------------------------------------------------------------- */}
-      <main className="max-w-7xl mx-auto px-4 lg:px-8 mt-5 space-y-6">
-        {/* Intra-Crew Emergency Alert Banner */}
+      <main className="max-w-[1560px] mx-auto px-4 lg:px-6 mt-4 space-y-4">
+        {/* Emergency Alert Banner (Shown only if active/unacknowledged) */}
         <EmergencyBanner
           alert={emergencyAlert}
           onAcknowledge={handleEmergencyAck}
@@ -189,384 +215,373 @@ export default function MissionDashboard() {
         />
 
         {/* -------------------------------------------------------------
-            ROW 1: CORE TELEMETRY VITALS GRID
+            ROW 1: SUMMARY KPI TILES (NON-REPEATING KEY METRICS)
         -------------------------------------------------------------- */}
-        <section>
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-xs font-mono uppercase tracking-widest text-slate-400 flex items-center space-x-2">
-              <Activity className="w-4 h-4 text-hud-cyan" />
-              <span>Continuous Physiological Telemetry & Biometrics</span>
-            </h2>
-            <span className="text-[11px] font-mono text-slate-500">
-              Sensors: Biosensor Patch Array 4B • Telemetry Stream 1 Hz
-            </span>
+        <section className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          {/* Tile 1: Heart Rate */}
+          <div className="rounded-lg border border-slate-800/80 bg-space-900/80 p-3">
+            <div className="flex items-center justify-between text-slate-400 text-[11px] mb-1">
+              <span>HEART RATE</span>
+              <Heart className="w-3.5 h-3.5 text-hud-cyan" />
+            </div>
+            <div className="flex items-baseline space-x-1">
+              <span className="text-xl font-bold text-white">{kpis?.avg_heart_rate ?? "--"}</span>
+              <span className="text-[10px] text-slate-500">BPM</span>
+            </div>
+            <div className="text-[10px] text-slate-500 mt-1">
+              Min {kpis?.min_heart_rate} • Max {kpis?.max_heart_rate}
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {/* Heart Rate */}
-            <TelemetryCard
-              title="Resting Heart Rate"
-              hazardLabel="Microgravity Hazard"
-              value={latestMetrics ? latestMetrics.heart_rate : 76}
-              unit="BPM"
-              icon={Heart}
-              status={
-                latestMetrics && latestMetrics.heart_rate > 115
-                  ? "critical"
-                  : latestMetrics && latestMetrics.heart_rate > 95
-                  ? "warning"
-                  : "nominal"
-              }
-              sparklineData={hrSparkline}
-              trend={latestMetrics && latestMetrics.heart_rate > 85 ? "up" : "flat"}
-              trendValue="+12% from baseline"
-              subtitle="Fluid cephalad shift index"
-            />
+          {/* Tile 2: SpO2 */}
+          <div className="rounded-lg border border-slate-800/80 bg-space-900/80 p-3">
+            <div className="flex items-center justify-between text-slate-400 text-[11px] mb-1">
+              <span>PULSE OXIMETRY</span>
+              <Activity className="w-3.5 h-3.5 text-hud-green" />
+            </div>
+            <div className="flex items-baseline space-x-1">
+              <span className="text-xl font-bold text-white">{kpis?.avg_spo2 ?? "--"}</span>
+              <span className="text-[10px] text-slate-500">% SpO2</span>
+            </div>
+            <div className="text-[10px] text-slate-500 mt-1">
+              Floor {kpis?.min_spo2}%
+            </div>
+          </div>
 
-            {/* SpO2 */}
-            <TelemetryCard
-              title="Pulse Oximetry"
-              hazardLabel="Closed Habitat"
-              value={latestMetrics ? latestMetrics.spo2 : 98}
-              unit="%"
-              icon={Activity}
-              status={
-                latestMetrics && latestMetrics.spo2 < 93
-                  ? "critical"
-                  : latestMetrics && latestMetrics.spo2 < 96
-                  ? "warning"
-                  : "nominal"
-              }
-              sparklineData={spo2Sparkline}
-              trend="flat"
-              trendValue="98.2% nominal"
-              subtitle="Habitat cabin ppO2 sync"
-            />
+          {/* Tile 3: Autonomic Stress (HRV RMSSD) */}
+          <div className="rounded-lg border border-slate-800/80 bg-space-900/80 p-3">
+            <div className="flex items-center justify-between text-slate-400 text-[11px] mb-1">
+              <span>STRESS (HRV)</span>
+              <TrendingUp className="w-3.5 h-3.5 text-hud-purple" />
+            </div>
+            <div className="flex items-baseline space-x-1">
+              <span className="text-xl font-bold text-white">{kpis?.avg_hrv_rmssd ?? "--"}</span>
+              <span className="text-[10px] text-slate-500">ms</span>
+            </div>
+            <div className="text-[10px] text-slate-500 mt-1">
+              Base: {crew.find((c) => c.id === selectedAstronautId)?.hrv_baseline || 50} ms
+            </div>
+          </div>
 
-            {/* Radiation Dose */}
-            <TelemetryCard
-              title="Daily Radiation Dose"
-              hazardLabel="Space Radiation"
-              value={latestMetrics ? latestMetrics.radiation_msv : 1.2}
-              unit="mSv/day"
-              icon={ShieldAlert}
-              status={
-                latestMetrics && latestMetrics.radiation_msv >= 20.0
-                  ? "critical"
-                  : latestMetrics && latestMetrics.radiation_msv >= 5.0
-                  ? "warning"
-                  : "nominal"
-              }
-              sparklineData={radSparkline}
-              trend={latestMetrics && latestMetrics.radiation_msv > 3.0 ? "up" : "flat"}
-              trendValue={latestMetrics && latestMetrics.radiation_msv >= 18 ? "SPE Surge" : "Normal"}
-              subtitle="Active Silicon Dosimeter"
-            />
+          {/* Tile 4: Sleep Duration */}
+          <div className="rounded-lg border border-slate-800/80 bg-space-900/80 p-3">
+            <div className="flex items-center justify-between text-slate-400 text-[11px] mb-1">
+              <span>SLEEP REST</span>
+              <Moon className="w-3.5 h-3.5 text-hud-blue" />
+            </div>
+            <div className="flex items-baseline space-x-1">
+              <span className="text-xl font-bold text-white">{kpis?.avg_sleep_hours ?? "--"}</span>
+              <span className="text-[10px] text-slate-500">hrs/sol</span>
+            </div>
+            <div className="text-[10px] text-slate-500 mt-1">
+              Weekly Avg
+            </div>
+          </div>
 
-            {/* Sleep Hours & Mood */}
-            <TelemetryCard
-              title="Circadian Sleep"
-              hazardLabel="Isolation Hazard"
-              value={latestMetrics ? latestMetrics.sleep_hours : 6.5}
-              unit="Hours"
-              icon={Moon}
-              status={
-                latestMetrics && latestMetrics.sleep_hours < 4.5 && latestMetrics.mood_score <= 2
-                  ? "critical"
-                  : latestMetrics && latestMetrics.sleep_hours < 5.5
-                  ? "warning"
-                  : "nominal"
-              }
-              sparklineData={sleepSparkline}
-              trend={latestMetrics && latestMetrics.sleep_hours < 5.0 ? "down" : "flat"}
-              trendValue={`Mood: ${latestMetrics ? latestMetrics.mood_score : 4}/5`}
-              subtitle="Cumulative REM deficit: -4.2h"
-            />
+          {/* Tile 5: Cabin CO2 */}
+          <div className="rounded-lg border border-slate-800/80 bg-space-900/80 p-3">
+            <div className="flex items-center justify-between text-slate-400 text-[11px] mb-1">
+              <span>CABIN CO2</span>
+              <Wind className="w-3.5 h-3.5 text-hud-amber" />
+            </div>
+            <div className="flex items-baseline space-x-1">
+              <span className="text-xl font-bold text-white">{kpis?.peak_cabin_co2 ?? "--"}</span>
+              <span className="text-[10px] text-slate-500">mmHg</span>
+            </div>
+            <div className="text-[10px] text-slate-500 mt-1">
+              Limit: 3.5 mmHg
+            </div>
+          </div>
+
+          {/* Tile 6: Radiation Flux */}
+          <div className="rounded-lg border border-slate-800/80 bg-space-900/80 p-3">
+            <div className="flex items-center justify-between text-slate-400 text-[11px] mb-1">
+              <span>RADIATION</span>
+              <Shield className="w-3.5 h-3.5 text-hud-red" />
+            </div>
+            <div className="flex items-baseline space-x-1">
+              <span className="text-xl font-bold text-white">{kpis?.peak_radiation_rate ?? "--"}</span>
+              <span className="text-[10px] text-slate-500">µSv/h</span>
+            </div>
+            <div className="text-[10px] text-slate-500 mt-1">
+              Total {kpis?.cumulative_radiation_msv} mSv
+            </div>
           </div>
         </section>
 
         {/* -------------------------------------------------------------
-            ROW 2: NASA 5-HAZARD RISK MATRIX & COUNTERMEASURES
+            ROW 2: VISUALIZATION GRIDS (DISTINCT CHART TYPES, NO REPETITION)
+            - DIAGRAM 1: LINE CHART (Physiological Vitals)
+            - DIAGRAM 2: AREA CHART (Ship & Habitat Environment)
         -------------------------------------------------------------- */}
-        <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* 5 Spaceflight Hazards Matrix */}
-          <div className="rounded-xl border border-slate-800 bg-space-900/90 p-5 backdrop-blur-md">
-            <div className="flex items-center justify-between mb-4 border-b border-slate-800 pb-3">
+        <section className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* DIAGRAM 1: LINE CHART - Continuous Vitals */}
+          <div className="rounded-xl border border-slate-800 bg-space-900/90 p-4">
+            <div className="flex items-center justify-between mb-3">
               <div className="flex items-center space-x-2">
-                <Compass className="w-4 h-4 text-hud-cyan" />
-                <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-white">
-                  NASA 5 Spaceflight Hazards Radar
+                <span className="w-2 h-2 rounded-full bg-hud-cyan animate-pulse"></span>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-white">
+                  Continuous Vitals Time-Series (Sol {astro?.start_sol}–{astro?.end_sol})
                 </h3>
               </div>
+              <span className="text-[10px] text-slate-500 font-mono">168-HR STREAM</span>
+            </div>
+            <div className="h-[250px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={weeklyData?.hourly_vitals || []} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
+                  <XAxis dataKey="label" stroke="#64748b" fontSize={10} interval={23} tickLine={false} />
+                  <YAxis stroke="#64748b" fontSize={10} tickLine={false} domain={["auto", "auto"]} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: "#0b0f19", borderColor: "#374151", fontSize: "11px" }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: "10px", paddingTop: "6px" }} />
+                  <Line type="monotone" dataKey="heart_rate" name="Heart Rate (BPM)" stroke="#00F0FF" strokeWidth={1.5} dot={false} isAnimationActive={false} />
+                  <Line type="monotone" dataKey="systolic_bp" name="Systolic BP (mmHg)" stroke="#F59E0B" strokeWidth={1.2} dot={false} isAnimationActive={false} />
+                  <Line type="monotone" dataKey="diastolic_bp" name="Diastolic BP (mmHg)" stroke="#38BDF8" strokeWidth={1.2} dot={false} isAnimationActive={false} />
+                  <Line type="monotone" dataKey="respiratory_rate" name="Respiration (BPM)" stroke="#A855F7" strokeWidth={1.2} dot={false} isAnimationActive={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* DIAGRAM 2: AREA CHART - Ship Environment & Life Support */}
+          <div className="rounded-xl border border-slate-800 bg-space-900/90 p-4">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center space-x-2">
+                <span className="w-2 h-2 rounded-full bg-hud-amber animate-pulse"></span>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-white">
+                  Spacecraft Environment & ECLSS (Sol {astro?.start_sol}–{astro?.end_sol})
+                </h3>
+              </div>
+              <span className="text-[10px] text-slate-500 font-mono">HABITAT LIFE SUPPORT</span>
+            </div>
+            <div className="h-[250px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={weeklyData?.ship_environment || []} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+                  <defs>
+                    <linearGradient id="co2Grad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#F59E0B" stopOpacity={0.4} />
+                      <stop offset="95%" stopColor="#F59E0B" stopOpacity={0.0} />
+                    </linearGradient>
+                    <linearGradient id="radGrad" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#EF4444" stopOpacity={0.4} />
+                      <stop offset="95%" stopColor="#EF4444" stopOpacity={0.0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
+                  <XAxis dataKey="label" stroke="#64748b" fontSize={10} interval={23} tickLine={false} />
+                  <YAxis stroke="#64748b" fontSize={10} tickLine={false} domain={["auto", "auto"]} />
+                  <Tooltip
+                    contentStyle={{ backgroundColor: "#0b0f19", borderColor: "#374151", fontSize: "11px" }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: "10px", paddingTop: "6px" }} />
+                  <Area type="monotone" dataKey="cabin_co2" name="Cabin CO2 (mmHg)" stroke="#F59E0B" fill="url(#co2Grad)" strokeWidth={1.5} isAnimationActive={false} />
+                  <Area type="monotone" dataKey="radiation_rate_usv" name="Radiation (µSv/h)" stroke="#EF4444" fill="url(#radGrad)" strokeWidth={1.5} isAnimationActive={false} />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </section>
+
+        {/* -------------------------------------------------------------
+            ROW 3: STATUS PIE CHART & STRESS/RECOVERY BAR CHART
+            - DIAGRAM 3: DONUT / PIE CHART (Metric Status Distribution)
+            - DIAGRAM 4: GROUPED BAR CHART (Autonomic Stress vs Sleep)
+        -------------------------------------------------------------- */}
+        <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* DIAGRAM 3: DONUT / PIE CHART - Status Distribution */}
+          <div className="rounded-xl border border-slate-800 bg-space-900/90 p-4">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-white">
+                Weekly Health Triage Breakdown
+              </h3>
+              <span className="text-[10px] text-slate-500 font-mono">168 HRS</span>
+            </div>
+            <div className="h-[210px] w-full flex items-center justify-center">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={weeklyData?.status_distribution || []}
+                    dataKey="value"
+                    nameKey="name"
+                    innerRadius={50}
+                    outerRadius={75}
+                    paddingAngle={3}
+                  >
+                    {(weeklyData?.status_distribution || []).map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <Tooltip contentStyle={{ backgroundColor: "#0b0f19", borderColor: "#374151", fontSize: "11px" }} />
+                  <Legend wrapperStyle={{ fontSize: "10px", paddingTop: "4px" }} />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="text-[10px] text-slate-400 text-center mt-1">
+              Primary Driver: <span className="text-hud-amber font-bold">{kpis?.dominant_driver || "NOMINAL"}</span>
+            </div>
+          </div>
+
+          {/* DIAGRAM 4: GROUPED BAR CHART - Daily Stress vs Sleep Recovery */}
+          <div className="md:col-span-2 rounded-xl border border-slate-800 bg-space-900/90 p-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center space-x-2">
+                <span className="w-2 h-2 rounded-full bg-hud-purple animate-pulse"></span>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-white">
+                  Autonomic Stress (HRV RMSSD) vs. Sleep Recovery (Per Sol)
+                </h3>
+              </div>
+              <span className="text-[10px] text-slate-500 font-mono">7-DAY SLIDING CYCLE</span>
+            </div>
+            <div className="h-[210px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={weeklyData?.stress_recovery_daily || []} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
+                  <XAxis dataKey="sol_label" stroke="#64748b" fontSize={10} tickLine={false} />
+                  <YAxis stroke="#64748b" fontSize={10} tickLine={false} domain={[0, "auto"]} />
+                  <Tooltip contentStyle={{ backgroundColor: "#0b0f19", borderColor: "#374151", fontSize: "11px" }} />
+                  <Legend wrapperStyle={{ fontSize: "10px", paddingTop: "4px" }} />
+                  <Bar dataKey="stress_hrv_rmssd" name="HRV RMSSD (ms)" fill="#A855F7" radius={[3, 3, 0, 0]} />
+                  <Bar dataKey="sleep_hours" name="Sleep Hours (h)" fill="#38BDF8" radius={[3, 3, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </section>
+
+        {/* -------------------------------------------------------------
+            ROW 4: PREDICTOR AGENT (7-DAY FORWARD HEALTH FORECAST)
+        -------------------------------------------------------------- */}
+        <section className="rounded-xl border border-cyan-900/60 bg-space-900/90 p-4">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4 border-b border-slate-800 pb-3">
+            <div className="flex items-center space-x-2.5">
+              <div className="p-1.5 rounded bg-cyan-950 border border-cyan-600 text-hud-cyan">
+                <Cpu className="w-4 h-4 animate-pulse" />
+              </div>
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-white">
+                  Autonomous Health Predictor Agent (Upcoming 7-Day Forecast)
+                </h3>
+                <p className="text-[10px] text-slate-400">
+                  Multivariate regression coupled with spacecraft environment metrics (Stress, O2, Cabin CO2, Radiation)
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center space-x-2 text-xs">
+              <span className="text-slate-400 text-[11px]">PROJECTED OUTLOOK:</span>
               <span
-                className={`text-[10px] font-mono px-2 py-0.5 rounded border uppercase font-bold ${
-                  triage?.overall_status === "CRITICAL"
-                    ? "bg-red-950 text-red-400 border-red-700"
-                    : triage?.overall_status === "HIGH"
-                    ? "bg-amber-950 text-amber-400 border-amber-700"
-                    : "bg-cyan-950 text-cyan-400 border-cyan-700"
+                className={`px-2 py-0.5 rounded font-bold text-[10px] uppercase border ${
+                  prediction?.health_outlook === "CRITICAL_DRIFT"
+                    ? "bg-red-950 text-red-400 border-red-800"
+                    : prediction?.health_outlook === "ELEVATED_STRAIN"
+                    ? "bg-amber-950 text-amber-400 border-amber-800"
+                    : "bg-emerald-950 text-emerald-400 border-emerald-800"
                 }`}
               >
-                {triage?.overall_status || "NOMINAL"} (Score: {triage?.overall_risk_score || 25}/100)
+                {prediction?.health_outlook || "CALCULATING..."}
               </span>
             </div>
+          </div>
 
-            {/* Hazard Progress Sliders */}
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+            {/* Predictor Risk Gauges */}
             <div className="space-y-3 font-mono text-xs">
-              {/* 1. Space Radiation */}
+              {/* Gauge 1: Cardiovascular Strain */}
               <div>
-                <div className="flex justify-between text-slate-300 mb-1">
-                  <span>1. Space Radiation (SPE / GCR)</span>
-                  <span className="text-hud-amber font-bold">
-                    {triage?.hazards.radiation_score || 15}%
-                  </span>
+                <div className="flex justify-between text-slate-300 text-[11px] mb-1">
+                  <span>Cardiovascular Strain</span>
+                  <span className="text-hud-cyan font-bold">{prediction?.cardiovascular_strain_score || 0}%</span>
                 </div>
-                <div className="w-full h-2 rounded-full bg-space-800 overflow-hidden">
-                  <div
-                    className="h-full bg-gradient-to-r from-yellow-500 to-red-500 rounded-full transition-all duration-500"
-                    style={{ width: `${triage?.hazards.radiation_score || 15}%` }}
-                  />
-                </div>
-              </div>
-
-              {/* 2. Microgravity */}
-              <div>
-                <div className="flex justify-between text-slate-300 mb-1">
-                  <span>2. Microgravity (Cardiovascular)</span>
-                  <span className="text-hud-cyan font-bold">
-                    {triage?.hazards.microgravity_score || 20}%
-                  </span>
-                </div>
-                <div className="w-full h-2 rounded-full bg-space-800 overflow-hidden">
+                <div className="w-full h-1.5 rounded-full bg-space-800 overflow-hidden">
                   <div
                     className="h-full bg-hud-cyan rounded-full transition-all duration-500"
-                    style={{ width: `${triage?.hazards.microgravity_score || 20}%` }}
+                    style={{ width: `${Math.min(100, prediction?.cardiovascular_strain_score || 0)}%` }}
                   />
                 </div>
               </div>
 
-              {/* 3. Isolation & Confinement */}
+              {/* Gauge 2: Cognitive Fatigue Risk */}
               <div>
-                <div className="flex justify-between text-slate-300 mb-1">
-                  <span>3. Isolation & Circadian Deprivation</span>
-                  <span className="text-hud-purple font-bold">
-                    {triage?.hazards.isolation_score || 25}%
-                  </span>
+                <div className="flex justify-between text-slate-300 text-[11px] mb-1">
+                  <span>Cognitive Fatigue Risk</span>
+                  <span className="text-hud-purple font-bold">{prediction?.cognitive_fatigue_risk || 0}%</span>
                 </div>
-                <div className="w-full h-2 rounded-full bg-space-800 overflow-hidden">
+                <div className="w-full h-1.5 rounded-full bg-space-800 overflow-hidden">
                   <div
                     className="h-full bg-hud-purple rounded-full transition-all duration-500"
-                    style={{ width: `${triage?.hazards.isolation_score || 25}%` }}
+                    style={{ width: `${Math.min(100, prediction?.cognitive_fatigue_risk || 0)}%` }}
                   />
                 </div>
               </div>
 
-              {/* 4. Distance from Earth */}
+              {/* Gauge 3: Hypoxia / ECLSS Risk */}
               <div>
-                <div className="flex justify-between text-slate-300 mb-1">
-                  <span>4. Distance from Earth (24m Comm Delay)</span>
-                  <span className="text-slate-400 font-bold">
-                    {triage?.hazards.distance_score || 55}%
-                  </span>
+                <div className="flex justify-between text-slate-300 text-[11px] mb-1">
+                  <span>Hypoxia / ECLSS Strain</span>
+                  <span className="text-hud-amber font-bold">{prediction?.hypoxia_eclss_risk || 0}%</span>
                 </div>
-                <div className="w-full h-2 rounded-full bg-space-800 overflow-hidden">
+                <div className="w-full h-1.5 rounded-full bg-space-800 overflow-hidden">
                   <div
-                    className="h-full bg-slate-500 rounded-full transition-all duration-500"
-                    style={{ width: `${triage?.hazards.distance_score || 55}%` }}
+                    className="h-full bg-hud-amber rounded-full transition-all duration-500"
+                    style={{ width: `${Math.min(100, prediction?.hypoxia_eclss_risk || 0)}%` }}
                   />
                 </div>
               </div>
 
-              {/* 5. Hostile Closed Environment */}
+              {/* Gauge 4: Radiation Hazard Index */}
               <div>
-                <div className="flex justify-between text-slate-300 mb-1">
-                  <span>5. Hostile Closed Habitat / ECLSS</span>
-                  <span className="text-hud-green font-bold">
-                    {triage?.hazards.hostile_env_score || 15}%
-                  </span>
+                <div className="flex justify-between text-slate-300 text-[11px] mb-1">
+                  <span>Radiation Hazard Index</span>
+                  <span className="text-hud-red font-bold">{prediction?.radiation_hazard_index || 0}%</span>
                 </div>
-                <div className="w-full h-2 rounded-full bg-space-800 overflow-hidden">
+                <div className="w-full h-1.5 rounded-full bg-space-800 overflow-hidden">
                   <div
-                    className="h-full bg-hud-green rounded-full transition-all duration-500"
-                    style={{ width: `${triage?.hazards.hostile_env_score || 15}%` }}
+                    className="h-full bg-hud-red rounded-full transition-all duration-500"
+                    style={{ width: `${Math.min(100, prediction?.radiation_hazard_index || 0)}%` }}
                   />
                 </div>
               </div>
-            </div>
 
-            {/* Active Clinical Flags */}
-            {triage?.clinical_flags && triage.clinical_flags.length > 0 && (
-              <div className="mt-4 pt-3 border-t border-slate-800 font-mono text-[11px]">
-                <span className="text-slate-400 font-semibold block mb-1">
-                  Active Clinical Triage Flags:
-                </span>
-                <ul className="space-y-1 text-amber-300">
-                  {triage.clinical_flags.map((flag, idx) => (
-                    <li key={idx} className="flex items-start space-x-1.5">
-                      <AlertTriangle className="w-3.5 h-3.5 text-hud-amber mt-0.5 flex-shrink-0" />
-                      <span>{flag}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-
-          {/* Prescribed Countermeasures List */}
-          <div className="lg:col-span-2 rounded-xl border border-slate-800 bg-space-900/90 p-5 backdrop-blur-md flex flex-col justify-between">
-            <div>
-              <div className="flex items-center justify-between mb-4 border-b border-slate-800 pb-3">
-                <div className="flex items-center space-x-2">
-                  <FileText className="w-4 h-4 text-hud-cyan" />
-                  <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-white">
-                    Actionable Clinical Countermeasures (NASA HRP Guidelines)
-                  </h3>
-                </div>
-                <span className="text-[10px] font-mono text-slate-400">
-                  Autonomous Protocol Generator
-                </span>
-              </div>
-
-              {/* Countermeasure Cards */}
-              <div className="space-y-2.5 max-h-[260px] overflow-y-auto pr-1">
-                {triage?.countermeasures && triage.countermeasures.length > 0 ? (
-                  triage.countermeasures.map((cm) => (
-                    <div
-                      key={cm.id}
-                      className="p-3 rounded-lg bg-space-850 border border-slate-700/70 hover:border-cyan-700 transition-colors"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-mono font-bold text-white tracking-wide">
-                          {cm.title}
-                        </span>
-                        <div className="flex items-center space-x-2">
-                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-space-800 text-slate-300 border border-slate-700">
-                            {cm.category}
-                          </span>
-                          <span
-                            className={`text-[10px] font-mono px-1.5 py-0.5 rounded font-bold ${
-                              cm.urgency === "IMMEDIATE"
-                                ? "bg-red-950 text-red-400 border border-red-800"
-                                : "bg-cyan-950 text-cyan-400 border border-cyan-800"
-                            }`}
-                          >
-                            {cm.urgency}
-                          </span>
-                        </div>
-                      </div>
-                      <p className="text-xs text-slate-300 mt-1 font-mono">{cm.protocol}</p>
-                      <p className="text-[10px] text-slate-500 mt-1 font-mono">
-                        Ref: {cm.nasa_hrp_reference}
-                      </p>
+              {/* Clinical Directives */}
+              <div className="pt-2 border-t border-slate-800 text-[10px] space-y-1.5">
+                <span className="text-slate-400 font-bold block uppercase">PREDICTED ACTION DIRECTIVES:</span>
+                {(prediction?.clinical_directives || []).map((dir, i) => (
+                  <div key={i} className="p-1.5 rounded bg-space-850 border border-slate-800">
+                    <div className="flex items-center justify-between text-hud-cyan font-semibold">
+                      <span>{dir.category}</span>
+                      <span className="text-hud-amber">{dir.urgency}</span>
                     </div>
-                  ))
-                ) : (
-                  <div className="text-center py-8 text-xs font-mono text-slate-400">
-                    No urgent clinical countermeasures indicated. Standard mission nutrition and
-                    resistive cycle ergometer routine active.
+                    <p className="text-slate-300 mt-0.5">{dir.action}</p>
                   </div>
-                )}
+                ))}
               </div>
             </div>
 
-            {/* Rationale Footer */}
-            <div className="mt-4 pt-3 border-t border-slate-800/80 text-[11px] font-mono text-slate-400 flex items-center justify-between">
-              <span>{triage?.ai_rationale || "All telemetry nominal."}</span>
-              <button
-                onClick={() => setIsChatOpen(true)}
-                className="text-hud-cyan hover:underline flex items-center space-x-1"
-              >
-                <span>Consult AI Flight Surgeon</span>
-                <span>→</span>
-              </button>
+            {/* Projected Trajectory Chart (7 Future Sols) */}
+            <div className="lg:col-span-3 h-[240px] w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={prediction?.projected_trajectory || []} margin={{ top: 5, right: 10, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
+                  <XAxis dataKey="sol_label" stroke="#64748b" fontSize={10} tickLine={false} />
+                  <YAxis stroke="#64748b" fontSize={10} tickLine={false} domain={[0, 100]} />
+                  <Tooltip contentStyle={{ backgroundColor: "#0b0f19", borderColor: "#374151", fontSize: "11px" }} />
+                  <Legend wrapperStyle={{ fontSize: "10px", paddingTop: "4px" }} />
+                  <Line type="monotone" dataKey="cardiovascular_strain" name="Predicted CV Strain (%)" stroke="#00F0FF" strokeWidth={2} strokeDasharray="5 5" dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="cognitive_fatigue" name="Predicted Cognitive Fatigue (%)" stroke="#A855F7" strokeWidth={2} strokeDasharray="5 5" dot={{ r: 3 }} />
+                  <Line type="monotone" dataKey="predicted_heart_rate" name="Predicted Heart Rate (BPM)" stroke="#F59E0B" strokeWidth={1.5} dot={{ r: 2 }} />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
-          </div>
-        </section>
-
-        {/* -------------------------------------------------------------
-            ROW 3: COMPREHENSIVE VITALS CHART & 7-DAY PREDICTION
-        -------------------------------------------------------------- */}
-        <section>
-          <VitalsChart
-            history={history}
-            trajectory={prediction?.projected_trajectory || []}
-          />
-        </section>
-
-        {/* -------------------------------------------------------------
-            ROW 4: FORECASTING STRAIN SCORES & EARLY WARNINGS
-        -------------------------------------------------------------- */}
-        <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {/* Cardiovascular Strain Score */}
-          <div className="rounded-xl border border-slate-800 bg-space-900/90 p-5 backdrop-blur-md">
-            <h4 className="text-xs font-mono uppercase text-slate-400 mb-2">
-              Predicted 7-Day Cardiovascular Strain
-            </h4>
-            <div className="flex items-baseline space-x-2">
-              <span className="text-3xl font-mono font-bold text-hud-cyan">
-                {prediction ? prediction.cardiovascular_strain_score : 28.5}
-              </span>
-              <span className="text-xs font-mono text-slate-400">/ 100 Index</span>
-            </div>
-            <p className="text-xs text-slate-400 mt-2 font-mono">
-              Composite model weighing plasma volume loss, resting pulse acceleration, and orthostatic
-              rebound.
-            </p>
-          </div>
-
-          {/* Cognitive Degradation Risk */}
-          <div className="rounded-xl border border-slate-800 bg-space-900/90 p-5 backdrop-blur-md">
-            <h4 className="text-xs font-mono uppercase text-slate-400 mb-2">
-              Cognitive Degradation Risk
-            </h4>
-            <div className="flex items-baseline space-x-2">
-              <span className="text-3xl font-mono font-bold text-hud-purple">
-                {prediction ? prediction.cognitive_degradation_risk : 22.0}%
-              </span>
-              <span className="text-xs font-mono text-slate-400">Failure Probability</span>
-            </div>
-            <p className="text-xs text-slate-400 mt-2 font-mono">
-              PVT reaction time lapse model based on cumulative sleep debt below 5 hours per night.
-            </p>
-          </div>
-
-          {/* Early Inflection Warnings */}
-          <div className="rounded-xl border border-slate-800 bg-space-900/90 p-5 backdrop-blur-md">
-            <h4 className="text-xs font-mono uppercase text-slate-400 mb-2">
-              Early Trend Inflection Warnings
-            </h4>
-            {prediction?.early_warnings && prediction.early_warnings.length > 0 ? (
-              <ul className="space-y-1.5 text-xs font-mono text-amber-300">
-                {prediction.early_warnings.map((warn, wIdx) => (
-                  <li key={wIdx} className="flex items-start space-x-1.5">
-                    <span className="text-hud-amber font-bold">•</span>
-                    <span>{warn}</span>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-xs font-mono text-emerald-400">
-                ✓ No critical trajectory inflection points detected across 7-day regression horizon.
-              </p>
-            )}
           </div>
         </section>
       </main>
 
-      {/* -------------------------------------------------------------
-          MODALS & SLIDE-OVER DRAWERS
-      -------------------------------------------------------------- */}
-      <DailyCheckInModal
-        isOpen={isCheckInOpen}
-        onClose={() => setIsCheckInOpen(false)}
-        onSubmit={handleCheckInSubmit}
-        currentMissionDay={currentMissionDay}
-      />
-
+      {/* Slide-Over Proactive Chat Drawer */}
       <ProactiveChatDrawer
         isOpen={isChatOpen}
         onClose={() => setIsChatOpen(false)}
-        latestMetrics={latestMetrics}
+        latestMetrics={null}
       />
     </div>
   );
