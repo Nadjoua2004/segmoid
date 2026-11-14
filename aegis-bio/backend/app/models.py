@@ -2,7 +2,10 @@
 SQLAlchemy ORM Models for Aegis-Bio Persistence
 """
 from datetime import datetime
-from sqlalchemy import Column, Integer, Float, String, DateTime, Boolean, Text
+from sqlalchemy import (
+    JSON, Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text, Time, UniqueConstraint,
+)
+from sqlalchemy.orm import relationship
 from app.database import Base
 
 class TelemetryLog(Base):
@@ -26,8 +29,9 @@ class TelemetryLog(Base):
     mood_score = Column(Integer, nullable=False)
     
     # Extended Aerospace Parameters
-    core_temp_c = Column(Float, default=36.9)
-    hrv_rmssd = Column(Float, default=42.0)
+    # Nullable with no synthetic default: NULL means "not measured" (callers pass explicit values).
+    core_temp_c = Column(Float, nullable=True)
+    hrv_rmssd = Column(Float, nullable=True)
     subjective_notes = Column(Text, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -97,3 +101,61 @@ class ChatHistoryModel(Base):
     content = Column(Text, nullable=False)
     citations = Column(Text, nullable=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
+
+
+class DailyCheckIn(Base):
+    """
+    Full daily self-report (lifestyle, environment, symptoms).
+    Vitals live in the linked TelemetryLog row so triage/forecasting keep working unchanged.
+    One check-in per astronaut per mission day.
+    """
+    __tablename__ = "daily_checkins"
+    __table_args__ = (
+        UniqueConstraint("astronaut_id", "mission_day", name="uq_daily_checkin_astronaut_day"),
+    )
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    telemetry_log_id = Column(
+        Integer, ForeignKey("telemetry_logs.id", ondelete="CASCADE"), nullable=False, unique=True, index=True
+    )
+    astronaut_id = Column(String(64), nullable=False, index=True)
+    mission_day = Column(Integer, nullable=False, index=True)
+    checkin_date = Column(Date, nullable=False)
+
+    # Vitals context not stored on TelemetryLog
+    glucose_context = Column(String(16), nullable=False)
+
+    # Sleep
+    bedtime = Column(Time, nullable=False)
+    wake_time = Column(Time, nullable=False)
+    sleep_quality = Column(Integer, nullable=False)
+    sleep_medication = Column(Boolean, nullable=False, default=False)
+
+    # Wellbeing (mood_score is on TelemetryLog)
+    energy_level = Column(Integer, nullable=False)
+    stress_level = Column(Integer, nullable=False)
+
+    # Exercise
+    cardio_minutes = Column(Integer, nullable=False)
+    resistance_minutes = Column(Integer, nullable=False)
+
+    # Nutrition
+    calories_kcal = Column(Integer, nullable=False)
+    water_liters = Column(Float, nullable=False)
+    breakfast = Column(Boolean, nullable=False, default=False)
+    lunch = Column(Boolean, nullable=False, default=False)
+    dinner = Column(Boolean, nullable=False, default=False)
+    vitamin_d_taken = Column(Boolean, nullable=False, default=False)
+
+    # Environment (radiation_msv is on TelemetryLog)
+    radiation_badge_worn = Column(Boolean, nullable=False)
+    cabin_temp_c = Column(Float, nullable=False)
+    cabin_co2_mmhg = Column(Float, nullable=False)
+    ear_protection_used = Column(Boolean, nullable=False, default=False)
+
+    symptoms = Column(JSON, nullable=False, default=list)
+    # ML classifier output (HealthAssessment JSON incl. model_version); NULL if the model was unavailable
+    assessment = Column(JSON, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+    telemetry = relationship("TelemetryLog", lazy="joined")

@@ -12,3 +12,4 @@ python-multipart>=0.0.9
 requests>=2.31.0
 bcrypt>=4.0.0
 PyJWT>=2.8.0
+threadpoolctl>=3.1.0

@@ -7,7 +7,9 @@ import {
   EmergencyAlert,
   TriageResult,
   PredictionResult,
+  DailyCheckInPayload,
 } from "@/lib/types";
+import { DailyCheckInModal } from "@/components/DailyCheckInModal";
 
 type ScreenId = "overview" | "daily-checkin" | "crew" | "hazards" | "alerts" | "thresholds";
 
@@ -105,6 +107,7 @@ export default function AegisBioApp() {
     callsign: "ASTRO-01",
   });
   const [leadFeedback, setLeadFeedback] = useState<string>("");
+  const [isModalCheckInOpen, setIsModalCheckInOpen] = useState<boolean>(false);
 
   // Unified Daily Check-in Form State (Single Screen, No Tabs)
   const [checkInForm, setCheckInForm] = useState<HealthMetrics>({
@@ -271,6 +274,14 @@ export default function AegisBioApp() {
     } finally {
       setIsSubmittingCheckIn(false);
     }
+  };
+
+  // Handle astronaut daily check-in modal submission (ISS-grade multi-step form)
+  const handleModalCheckInSubmit = async (payload: DailyCheckInPayload) => {
+    const record = await api.submitDailyCheckIn(payload);
+    await loadAllData(payload.astronaut_id);
+    setCheckInFeedback(`Successfully submitted guided check-in for ${payload.astronaut_id}.`);
+    return record;
   };
 
   // Register Crew Member + Emergency Contact
@@ -2057,14 +2068,35 @@ export default function AegisBioApp() {
                 background: "#282828",
               }}
             >
-              <div>
-                <h1 style={{ margin: 0, fontSize: "16px", fontWeight: 600 }}>
-                  Daily Crew Check-in &amp; Biometric Log
-                </h1>
-                <p style={{ margin: "4px 0 0", fontSize: "12px", color: "#A3A3A3" }}>
-                  Enter all daily check-in parameters on this single screen. Syncs directly to
-                  FastAPI &amp; Supabase and runs Dual-Classifier Triage.
-                </p>
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
+                <div>
+                  <h1 style={{ margin: 0, fontSize: "16px", fontWeight: 600 }}>
+                    Daily Crew Check-in &amp; Biometric Log
+                  </h1>
+                  <p style={{ margin: "4px 0 0", fontSize: "12px", color: "#A3A3A3" }}>
+                    Enter daily check-in parameters on this screen or launch the guided ISS multi-step modal.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsModalCheckInOpen(true)}
+                  style={{
+                    height: "36px",
+                    padding: "0 16px",
+                    borderRadius: "8px",
+                    border: "none",
+                    background: "#7DD3FC",
+                    color: "#1C1C1C",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "6px",
+                  }}
+                >
+                  📋 Launch Guided ISS 6-Step Modal
+                </button>
               </div>
 
               <form
@@ -3781,6 +3813,15 @@ export default function AegisBioApp() {
           </form>
         </div>
       )}
+
+      {/* Guided ISS-Grade Multi-Step Check-in Modal */}
+      <DailyCheckInModal
+        isOpen={isModalCheckInOpen}
+        onClose={() => setIsModalCheckInOpen(false)}
+        onSubmit={handleModalCheckInSubmit}
+        currentMissionDay={latestMetrics?.mission_day || 1}
+        previousMetrics={latestMetrics}
+      />
     </div>
   );
 }

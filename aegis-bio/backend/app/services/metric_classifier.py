@@ -3,27 +3,11 @@ Classifier 1: Metric-Level Severity Classifier
 Evaluates each individual astronaut biometric and environmental metric:
 Classifies each into: 'NORMAL', 'MEDIUM', or 'CRITICAL' based on aerospace medical baselines.
 """
-from typing import Dict, Any, List
-from pydantic import BaseModel
+from typing import Dict, Any
 
-class MetricEvaluation(BaseModel):
-    metric_name: str
-    label: str
-    value: float
-    unit: str
-    status: str  # "NORMAL", "MEDIUM", "CRITICAL"
-    nominal_range: str
-    deviation: str
-    clinical_note: str
-
-class MetricClassificationReport(BaseModel):
-    astronaut_id: str
-    mission_day: int
-    highest_severity: str  # "NORMAL", "MEDIUM", "CRITICAL"
-    metrics: Dict[str, MetricEvaluation]
-    critical_count: int
-    medium_count: int
-    normal_count: int
+# Use the shared API schemas (not local look-alike copies): Pydantic v2 rejects instances of a
+# different class with the same fields, which made TriageResult(metric_evaluations=...) fail.
+from app.schemas import MetricEvaluation, MetricClassificationReport
 
 # Aerospace clinical thresholds defined by NASA-STD-3001
 METRIC_THRESHOLDS = {
