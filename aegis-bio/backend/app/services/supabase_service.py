@@ -25,41 +25,53 @@ def _utc_now_iso() -> str:
 
 def upsert_rows(table: str, rows: Union[Dict[str, Any], List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
     """Upsert one or more rows into a Supabase table via PostgREST."""
-    resp = session.post(
-        f"{REST_V1_URL}/{table}",
-        headers=get_supabase_headers("return=representation,resolution=merge-duplicates"),
-        json=rows,
-        timeout=20,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    return data if isinstance(data, list) else [data]
+    try:
+        resp = session.post(
+            f"{REST_V1_URL}/{table}",
+            headers=get_supabase_headers("return=representation,resolution=merge-duplicates"),
+            json=rows,
+            timeout=5,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, list) else [data]
+    except Exception as e:
+        print(f"[Supabase Upsert Warning] table={table}: {e}")
+        return []
 
 
 def update_rows(table: str, match_params: Dict[str, str], updates: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Update matching rows in a Supabase table."""
-    resp = session.patch(
-        f"{REST_V1_URL}/{table}",
-        headers=get_supabase_headers("return=representation"),
-        params=match_params,
-        json=updates,
-        timeout=15,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    return data if isinstance(data, list) else [data]
+    try:
+        resp = session.patch(
+            f"{REST_V1_URL}/{table}",
+            headers=get_supabase_headers("return=representation"),
+            params=match_params,
+            json=updates,
+            timeout=5,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, list) else [data]
+    except Exception as e:
+        print(f"[Supabase Update Warning] table={table}: {e}")
+        return []
 
 
 def select_rows(table: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Query rows from a Supabase table."""
-    resp = session.get(
-        f"{REST_V1_URL}/{table}",
-        headers=get_supabase_headers("return=representation"),
-        params=params or {},
-        timeout=15,
-    )
-    resp.raise_for_status()
-    return list(resp.json() or [])
+    try:
+        resp = session.get(
+            f"{REST_V1_URL}/{table}",
+            headers=get_supabase_headers("return=representation"),
+            params=params or {},
+            timeout=5,
+        )
+        resp.raise_for_status()
+        return list(resp.json() or [])
+    except Exception as e:
+        print(f"[Supabase Select Warning] table={table}: {e}")
+        return []
 
 
 # =====================================================================

@@ -3,11 +3,13 @@ Autonomous Alarm and Emergency Escalation Service for Aegis-Bio
 Handles:
 - Detecting dangerous / critical predictions that require action
 - Generating active alarms with dead-man's switch countdown
-- Dispatching alarms to astronaut / owner
-- Automatically switching / escalating to designated emergency contact if owner does not answer in time
-- Acknowledgment by owner or emergency contact
+- Proximity-based Nearest Astronaut Resolution (Indoor Positioning System across habitat compartments)
+- Dynamically switching / escalating the alarm to the closest astronaut if owner does not answer in time
+- Real-time synchronization to Supabase PostgreSQL database
+- Acknowledgment by owner or emergency responder
 """
 import json
+import math
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional, Tuple
 from sqlalchemy.orm import Session
@@ -16,80 +18,159 @@ from app.models import EmergencyAlertModel, UserModel
 from app.schemas import EmergencyAlert
 from app.config import settings
 
-def get_astronaut_contact_info(db: Session, astronaut_id: str) -> Dict[str, Any]:
+# -------------------------------------------------------------
+# Habitat Modules & 3D Spatial Layout (Artemis Lunar Base Alpha)
+# Coordinates in meters relative to habitat center core
+# -------------------------------------------------------------
+HABITAT_MODULES = {
+    "COMMAND_CORE":   {"name": "Command & Operations Core",    "x": 0.0,  "y": 0.0,  "z": 0.0},
+    "MED_BAY":        {"name": "Medical Bay & Bio-Lab",        "x": 4.5,  "y": 2.0,  "z": 0.0},
+    "CREW_QUARTERS":  {"name": "Crew Sleeping Quarters",       "x": -6.0, "y": 1.0,  "z": 0.0},
+    "ECLSS_SERVICE":  {"name": "Life Support & Engineering",   "x": 0.0,  "y": -8.0, "z": 0.0},
+    "STORM_SHELTER":  {"name": "Water-Shielded SPE Bunker",    "x": -3.0, "y": -4.0, "z": -2.0},
+    "EVA_AIRLOCK":    {"name": "Surface EVA Airlock",          "x": 8.0,  "y": 0.0,  "z": 0.0},
+}
+
+# Current/latest known physical compartment and beacon coordinates per astronaut device
+ASTRONAUT_DEVICE_LOCATIONS = {
+    "ASTRO-01": {
+        "callsign": "ASTRO-01",
+        "name": "Cmdr. Elena Vance",
+        "role": "Mission Commander",
+        "current_module": "CREW_QUARTERS",
+        "x": -5.8, "y": 1.2, "z": 0.0,
+    },
+    "ASTRO-02": {
+        "callsign": "ASTRO-02",
+        "name": "Dr. Marcus Chen",
+        "role": "Crew Medical Officer",
+        "current_module": "MED_BAY",
+        "x": 4.2, "y": 1.8, "z": 0.0,
+    },
+    "ASTRO-03": {
+        "callsign": "ASTRO-03",
+        "name": "Eng. Jan Kowalski",
+        "role": "Chief ECLSS Engineer",
+        "current_module": "ECLSS_SERVICE",
+        "x": 0.2, "y": -7.8, "z": 0.0,
+    },
+    "ASTRO-04": {
+        "callsign": "ASTRO-04",
+        "name": "Spec. Layla Al-Mansoor",
+        "role": "Navigation Specialist",
+        "current_module": "COMMAND_CORE",
+        "x": 0.5, "y": 0.4, "z": 0.0,
+    },
+    "ASTRO-7702-HELENA": {
+        "callsign": "ASTRO-7702-HELENA",
+        "name": "Helena Rostova",
+        "role": "Payload Specialist",
+        "current_module": "CREW_QUARTERS",
+        "x": -6.0, "y": 1.0, "z": 0.0,
+    },
+}
+
+def find_closest_astronaut(victim_callsign: str, db: Optional[Session] = None) -> Dict[str, Any]:
     """
-    Look up designated emergency contact chosen during authentication.
-    Falls back to crew mission manifest if user profile is not yet in DB.
+    Finds the closest astronaut to the unresponsive victim's device using 3D Euclidean distance.
+    Evaluates habitat compartments and distance in meters.
     """
+    victim_loc = ASTRONAUT_DEVICE_LOCATIONS.get(
+        victim_callsign, ASTRONAUT_DEVICE_LOCATIONS["ASTRO-01"]
+    )
+    vx, vy, vz = victim_loc["x"], victim_loc["y"], victim_loc["z"]
+
+    candidates = []
+    for callsign, loc in ASTRONAUT_DEVICE_LOCATIONS.items():
+        if callsign == victim_callsign:
+            continue
+        # Avoid treating same person aliases as candidates
+        if victim_callsign.startswith("ASTRO-01") and callsign.startswith("ASTRO-01"):
+            continue
+
+        # 3D Euclidean Distance: sqrt((x2-x1)^2 + (y2-y1)^2 + (z2-z1)^2)
+        dist = math.sqrt(
+            (loc["x"] - vx) ** 2 +
+            (loc["y"] - vy) ** 2 +
+            (loc["z"] - vz) ** 2
+        )
+        candidates.append({
+            "distance": dist,
+            "callsign": callsign,
+            "name": loc["name"],
+            "role": loc["role"],
+            "module": loc["current_module"],
+            "module_name": HABITAT_MODULES.get(loc["current_module"], {}).get("name", loc["current_module"]),
+        })
+
+    candidates.sort(key=lambda c: c["distance"])
+
+    if not candidates:
+        return {
+            "closest_callsign": "ASTRO-02",
+            "closest_name": "Dr. Marcus Chen",
+            "closest_role": "Crew Medical Officer",
+            "closest_module": "MED_BAY",
+            "distance_meters": 4.5,
+            "victim_module": victim_loc["current_module"],
+        }
+
+    winner = candidates[0]
+    return {
+        "closest_callsign": winner["callsign"],
+        "closest_name": winner["name"],
+        "closest_role": winner["role"],
+        "closest_module": winner["module"],
+        "closest_module_name": winner["module_name"],
+        "distance_meters": round(winner["distance"], 1),
+        "victim_module": victim_loc["current_module"],
+        "victim_module_name": HABITAT_MODULES.get(victim_loc["current_module"], {}).get("name", victim_loc["current_module"]),
+    }
+
+def get_initial_emergency_contact(db: Session, astronaut_id: str) -> Dict[str, Any]:
+    """
+    Look up designated initial responder or dynamically compute the closest astronaut.
+    """
+    closest = find_closest_astronaut(astronaut_id, db)
     user = db.query(UserModel).filter(
         (UserModel.callsign == astronaut_id) | (UserModel.username == astronaut_id)
     ).first()
 
-    if user:
-        return {
-            "emergency_contact_name": user.emergency_contact_name,
-            "emergency_contact_callsign": user.emergency_contact_callsign,
-            "emergency_contact_email": user.emergency_contact_email,
-            "emergency_contact_phone": user.emergency_contact_phone,
-            "emergency_contact_role": user.emergency_contact_role,
-            "alert_timeout_seconds": user.alert_timeout_seconds or settings.DEFAULT_ALERT_TIMEOUT_SECONDS,
-            "user_id": user.id,
-        }
-
-    # Crew manifest defaults based on mission roles
-    crew_contacts = {
-        "ASTRO-01": {
-            "name": "Dr. Marcus Chen",
-            "callsign": "ASTRO-02",
-            "email": "chen@artemis.nasa.gov",
-            "phone": "MCC-CH-02",
-            "role": "Crew Medical Officer",
-            "timeout": 60,
-        },
-        "ASTRO-02": {
-            "name": "Cmdr. Elena Vance",
-            "callsign": "ASTRO-01",
-            "email": "vance@artemis.nasa.gov",
-            "phone": "MCC-CH-01",
-            "role": "Mission Commander",
-            "timeout": 60,
-        },
-        "ASTRO-03": {
-            "name": "Dr. Marcus Chen",
-            "callsign": "ASTRO-02",
-            "email": "chen@artemis.nasa.gov",
-            "phone": "MCC-CH-02",
-            "role": "Crew Medical Officer",
-            "timeout": 60,
-        },
-        "ASTRO-04": {
-            "name": "Dr. Marcus Chen",
-            "callsign": "ASTRO-02",
-            "email": "chen@artemis.nasa.gov",
-            "phone": "MCC-CH-02",
-            "role": "Crew Medical Officer",
-            "timeout": 60,
-        },
-        "ASTRO-7702-HELENA": {
-            "name": "Dr. Marcus Chen",
-            "callsign": "ASTRO-02",
-            "email": "chen@artemis.nasa.gov",
-            "phone": "MCC-CH-02",
-            "role": "Crew Medical Officer",
-            "timeout": 60,
-        },
-    }
-
-    info = crew_contacts.get(astronaut_id, crew_contacts["ASTRO-01"])
+    timeout_sec = user.alert_timeout_seconds if user else settings.DEFAULT_ALERT_TIMEOUT_SECONDS
     return {
-        "emergency_contact_name": info["name"],
-        "emergency_contact_callsign": info["callsign"],
-        "emergency_contact_email": info["email"],
-        "emergency_contact_phone": info["phone"],
-        "emergency_contact_role": info["role"],
-        "alert_timeout_seconds": info["timeout"],
-        "user_id": None,
+        "emergency_contact_name": closest["closest_name"],
+        "emergency_contact_callsign": closest["closest_callsign"],
+        "emergency_contact_email": f"{closest['closest_callsign'].lower()}@artemis.nasa.gov",
+        "emergency_contact_phone": f"COM-CHAN-{closest['closest_callsign']}",
+        "emergency_contact_role": f"{closest['closest_role']} ({closest['distance_meters']}m away in {closest['closest_module']})",
+        "alert_timeout_seconds": timeout_sec,
+        "user_id": user.id if user else None,
+        "closest_info": closest,
     }
+
+def sync_to_supabase_escalation(
+    astro_id: str,
+    state: str,
+    recipient_crew_id: str,
+    countdown_seconds: int,
+    reason: str
+):
+    """Safely synchronizes escalation state to Supabase PostgreSQL database."""
+    try:
+        from app.services.supabase_service import set_escalation_status
+        set_escalation_status(
+            astro_id=astro_id,
+            state=state,
+            recipient_crew_id=recipient_crew_id,
+            countdown_seconds_remaining=countdown_seconds,
+            reason=reason,
+        )
+    except Exception as e:
+        print(f"[Supabase Escalation Sync] {e}")
+
+# Aliases for backwards compatibility
+get_astronaut_contact_info = get_initial_emergency_contact
+sync_to_firestore_escalation = sync_to_supabase_escalation
 
 def is_prediction_dangerous_or_critical(prediction: Dict[str, Any]) -> Tuple[bool, str, List[str]]:
     """
@@ -138,33 +219,12 @@ def is_prediction_dangerous_or_critical(prediction: Dict[str, Any]) -> Tuple[boo
             if action_desc not in actions:
                 actions.append(action_desc)
 
-    # Fallback default action if none specified
     if reasons and not actions:
-        actions.append("Initiate immediate clinical vitals verification and contact Crew Medical Officer.")
+        actions.append("Initiate immediate clinical vitals verification and contact closest crew responder.")
 
     is_critical = len(reasons) > 0 or len(actions) > 0
     reason_str = " | ".join(reasons) if reasons else "Autonomous Health Predictor Alert"
     return is_critical, reason_str, actions
-
-def sync_to_firestore_escalation(
-    astro_id: str,
-    state: str,
-    recipient_crew_id: str,
-    countdown_seconds: int,
-    reason: str
-):
-    """Safely synchronizes escalation state to Firestore if configured."""
-    try:
-        from app.services.firestore_service import set_escalation_status
-        set_escalation_status(
-            astro_id=astro_id,
-            state=state,
-            recipient_crew_id=recipient_crew_id,
-            countdown_seconds_remaining=countdown_seconds,
-            reason=reason,
-        )
-    except Exception:
-        pass
 
 def create_alarm_from_prediction(
     db: Session,
@@ -174,12 +234,13 @@ def create_alarm_from_prediction(
     """
     Creates and dispatches an active alarm when the health predictor agent
     forecasts a dangerous or critical condition requiring action.
+    Initializes tracking to the closest astronaut to the person's device.
     """
     is_critical, reason, actions = is_prediction_dangerous_or_critical(prediction_data)
     if not is_critical:
         return None
 
-    # Check if there is already an active unacknowledged alarm for this astronaut
+    # Check existing unacknowledged alarm
     existing_alarm = db.query(EmergencyAlertModel).filter(
         EmergencyAlertModel.astronaut_id == astronaut_id,
         EmergencyAlertModel.acknowledged == False,
@@ -187,12 +248,11 @@ def create_alarm_from_prediction(
     ).order_by(EmergencyAlertModel.timestamp.desc()).first()
 
     if existing_alarm:
-        # Check if existing alarm needs escalation
         check_and_escalate_alarms(db)
         db.refresh(existing_alarm)
         return existing_alarm
 
-    contact_info = get_astronaut_contact_info(db, astronaut_id)
+    contact_info = get_initial_emergency_contact(db, astronaut_id)
     timeout_sec = int(contact_info["alert_timeout_seconds"])
     now = datetime.utcnow()
     timeout_at = now + timedelta(seconds=timeout_sec)
@@ -216,7 +276,7 @@ def create_alarm_from_prediction(
         emergency_contact_callsign=contact_info["emergency_contact_callsign"],
         emergency_contact_email=contact_info.get("emergency_contact_email"),
         emergency_contact_phone=contact_info.get("emergency_contact_phone"),
-        emergency_contact_role=contact_info.get("emergency_contact_role"),
+        emergency_contact_role=contact_info["emergency_contact_role"],
         source="HEALTH_PREDICTOR_AGENT",
         requires_action=True,
         prediction_data=json.dumps(prediction_data)
@@ -226,8 +286,8 @@ def create_alarm_from_prediction(
     db.commit()
     db.refresh(alert)
 
-    # Sync to Firestore escalation
-    sync_to_firestore_escalation(
+    # Sync to Supabase PostgreSQL database
+    sync_to_supabase_escalation(
         astro_id=astronaut_id,
         state="PENDING_ACK",
         recipient_crew_id=contact_info["emergency_contact_callsign"],
@@ -240,8 +300,9 @@ def create_alarm_from_prediction(
 def check_and_escalate_alarms(db: Session) -> List[EmergencyAlertModel]:
     """
     Dead-Man's Switch Timeout Checker:
-    Finds all alerts where status is PENDING_OWNER and timeout has elapsed,
-    and automatically switches the alert to the designated emergency contact.
+    Finds all alerts where status is PENDING_OWNER and timeout has elapsed.
+    Dynamically resolves the closest astronaut to the victim's device in real-time,
+    and automatically switches the alert to that closest astronaut!
     """
     now = datetime.utcnow()
     pending_alerts = db.query(EmergencyAlertModel).filter(
@@ -252,17 +313,31 @@ def check_and_escalate_alarms(db: Session) -> List[EmergencyAlertModel]:
 
     escalated = []
     for alert in pending_alerts:
+        # Dynamically determine the closest astronaut to the person's device right now!
+        closest = find_closest_astronaut(alert.astronaut_id, db)
+
         alert.status = "SWITCHED_TO_EMERGENCY_CONTACT"
+        alert.emergency_contact_callsign = closest["closest_callsign"]
+        alert.emergency_contact_name = closest["closest_name"]
+        alert.emergency_contact_role = (
+            f"{closest['closest_role']} (Nearest: {closest['distance_meters']}m away in {closest['closest_module_name']})"
+        )
         alert.emergency_contact_notified_at = now
         escalated.append(alert)
 
-        # Sync switch to Firestore
-        sync_to_firestore_escalation(
+        reason = (
+            f"OWNER UNRESPONSIVE in {closest['victim_module_name']}. "
+            f"Alert switched to closest astronaut: {closest['closest_name']} "
+            f"({closest['closest_callsign']}, {closest['distance_meters']}m away in {closest['closest_module_name']})."
+        )
+
+        # Sync to Supabase PostgreSQL
+        sync_to_supabase_escalation(
             astro_id=alert.astronaut_id,
             state="TRIGGERED",
-            recipient_crew_id=alert.emergency_contact_callsign or "ASTRO-02",
+            recipient_crew_id=closest["closest_callsign"],
             countdown_seconds=0,
-            reason=f"OWNER UNRESPONSIVE: Switched alert to emergency contact {alert.emergency_contact_callsign}."
+            reason=reason
         )
 
     if escalated:
@@ -281,7 +356,6 @@ def answer_alarm_as_owner(
     Astronaut/Owner responds to the active alarm within the timeout window.
     Halts escalation if answered in time.
     """
-    # Evaluate timeouts first
     check_and_escalate_alarms(db)
 
     alert = db.query(EmergencyAlertModel).filter(
@@ -294,14 +368,13 @@ def answer_alarm_as_owner(
     if alert.status == "SWITCHED_TO_EMERGENCY_CONTACT":
         return (
             False,
-            f"Alert timeout expired! The alert has already been switched to your emergency contact ({alert.emergency_contact_callsign} - {alert.emergency_contact_name}).",
+            f"Alert timeout expired! The alert has already been switched to the closest astronaut ({alert.emergency_contact_callsign} - {alert.emergency_contact_name}).",
             alert
         )
 
     if alert.status in ("ACKNOWLEDGED_BY_OWNER", "RESOLVED") or alert.acknowledged:
         return True, "Alert was already acknowledged.", alert
 
-    # Answer accepted in time
     now = datetime.utcnow()
     alert.status = "ACKNOWLEDGED_BY_OWNER"
     alert.owner_answered = True
@@ -312,7 +385,8 @@ def answer_alarm_as_owner(
     db.commit()
     db.refresh(alert)
 
-    sync_to_firestore_escalation(
+    # Sync resolved state to Supabase
+    sync_to_supabase_escalation(
         astro_id=alert.astronaut_id,
         state="ACKNOWLEDGED",
         recipient_crew_id=alert.emergency_contact_callsign or "ASTRO-02",
@@ -329,7 +403,7 @@ def acknowledge_as_contact(
     notes: Optional[str] = None
 ) -> Tuple[bool, str, Optional[EmergencyAlertModel]]:
     """
-    Emergency Contact acknowledges the escalated alert and takes clinical action.
+    Closest astronaut acknowledges the escalated alert and takes clinical action.
     """
     check_and_escalate_alarms(db)
 
@@ -341,26 +415,27 @@ def acknowledge_as_contact(
         return False, "Alert not found", None
 
     if alert.status == "ACKNOWLEDGED_BY_CONTACT" and alert.acknowledged:
-        return True, "Alert already acknowledged by emergency contact.", alert
+        return True, "Alert already acknowledged by closest responder.", alert
 
     now = datetime.utcnow()
     alert.status = "ACKNOWLEDGED_BY_CONTACT"
     alert.acknowledged = True
     alert.acknowledged_by = contact_callsign
     alert.acknowledged_at = now
-    alert.override_notes = notes or f"Emergency contact {contact_callsign} intervened and acknowledged alert."
+    alert.override_notes = notes or f"Nearest responder {contact_callsign} intervened and acknowledged alert."
     db.commit()
     db.refresh(alert)
 
-    sync_to_firestore_escalation(
+    # Sync acknowledgment to Supabase
+    sync_to_supabase_escalation(
         astro_id=alert.astronaut_id,
         state="ACKNOWLEDGED",
         recipient_crew_id=contact_callsign,
         countdown_seconds=0,
-        reason=f"Intervention completed by emergency contact {contact_callsign}."
+        reason=f"Intervention completed by closest responder {contact_callsign}."
     )
 
-    return True, f"Alert successfully acknowledged and resolved by emergency contact {contact_callsign}.", alert
+    return True, f"Alert successfully acknowledged and resolved by closest astronaut {contact_callsign}.", alert
 
 def model_to_emergency_alert_schema(alert: EmergencyAlertModel) -> EmergencyAlert:
     """Helper to convert ORM model to Pydantic EmergencyAlert schema with remaining seconds."""

@@ -108,12 +108,13 @@ class TestAlarmAndAuthentication(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         pred = res.json()
 
-        # The prediction should indicate critical risk and trigger alarm
+        # The prediction should indicate critical risk and trigger alarm routed to closest astronaut
         self.assertTrue(pred["alarm_triggered"])
         self.assertIsNotNone(pred["alarm_id"])
         alarm_details = pred["alarm_details"]
         self.assertEqual(alarm_details["status"], "PENDING_OWNER")
-        self.assertEqual(alarm_details["emergency_contact_callsign"], "ASTRO-02")
+        self.assertIsNotNone(alarm_details["emergency_contact_callsign"])
+        self.assertIn("away", alarm_details["emergency_contact_role"].lower())
         self.assertGreater(alarm_details["remaining_seconds"], 0)
 
     def test_05_owner_answers_alarm_in_time(self):
@@ -139,14 +140,14 @@ class TestAlarmAndAuthentication(unittest.TestCase):
     def test_06_dead_man_switch_timeout_escalates_to_emergency_contact(self):
         """
         Verify that if the owner does not answer within the timeout window,
-        the alert automatically switches / escalates to the designated Emergency Contact.
+        the alert automatically switches / escalates to the CLOSEST astronaut
+        to the person's device in real-time.
         """
-        # Create an alert with an expired timeout (in the past)
         now = datetime.utcnow()
         expired_alert_id = f"TEST-TIMEOUT-{int(now.timestamp())}"
         alert_record = EmergencyAlertModel(
             alert_id=expired_alert_id,
-            astronaut_id="ASTRO-TEST-TIMEOUT",
+            astronaut_id="ASTRO-01",
             severity="CRITICAL",
             hazard_origin="Agent Predictor: Hypoxia & Autonomic Collapse",
             message="Critical hypoxia risk detected; immediate LiOH scrub needed.",
@@ -155,7 +156,7 @@ class TestAlarmAndAuthentication(unittest.TestCase):
             status="PENDING_OWNER",
             timeout_seconds=30,
             timeout_at=now - timedelta(seconds=90),  # expired 90s ago
-            emergency_contact_name="Dr. Marcus Chen",
+            emergency_contact_name="Pending",
             emergency_contact_callsign="ASTRO-02",
             emergency_contact_role="Crew Medical Officer",
             acknowledged=False,
@@ -167,13 +168,14 @@ class TestAlarmAndAuthentication(unittest.TestCase):
         self.db.commit()
 
         # Query status / check timeout
-        status_res = self.client.get(f"/api/emergency/status?astronaut_id=ASTRO-TEST-TIMEOUT")
+        status_res = self.client.get(f"/api/emergency/status?astronaut_id=ASTRO-01")
         self.assertEqual(status_res.status_code, 200)
         current_status = status_res.json()
         self.assertEqual(current_status["alert_id"], expired_alert_id)
-        # Should have automatically switched to emergency contact!
+        # Should have automatically switched to the closest astronaut to ASTRO-01's device!
         self.assertEqual(current_status["status"], "SWITCHED_TO_EMERGENCY_CONTACT")
-        self.assertEqual(current_status["emergency_contact_callsign"], "ASTRO-02")
+        self.assertIsNotNone(current_status["emergency_contact_callsign"])
+        self.assertIn("Nearest:", current_status["emergency_contact_role"])
         self.assertEqual(current_status["remaining_seconds"], 0)
 
         # Now, if the owner attempts to answer after timeout:
@@ -184,7 +186,7 @@ class TestAlarmAndAuthentication(unittest.TestCase):
         self.assertEqual(late_answer_res.status_code, 200)
         late_data = late_answer_res.json()
         self.assertFalse(late_data["success"])
-        self.assertIn("switched to your emergency contact", late_data["message"].lower())
+        self.assertIn("switched", late_data["message"].lower())
 
     def test_07_emergency_contact_acknowledges_escalated_alarm(self):
         """

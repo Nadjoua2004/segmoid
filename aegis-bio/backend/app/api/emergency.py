@@ -27,7 +27,8 @@ from app.services.alarm_service import (
     acknowledge_as_contact,
     model_to_emergency_alert_schema,
     get_astronaut_contact_info,
-    sync_to_firestore_escalation
+    sync_to_supabase_escalation,
+    find_closest_astronaut
 )
 
 router = APIRouter(prefix="/api/emergency", tags=["Intra-Crew Emergency Protocol & Alarm System"])
@@ -114,7 +115,7 @@ def get_emergency_status(
             db.commit()
             db.refresh(db_alert)
 
-            sync_to_firestore_escalation(
+            sync_to_supabase_escalation(
                 astro_id=latest.astronaut_id,
                 state="PENDING_ACK",
                 recipient_crew_id=contact_info["emergency_contact_callsign"],
@@ -224,7 +225,7 @@ def acknowledge_emergency(
     db.commit()
     db.refresh(alert)
 
-    sync_to_firestore_escalation(
+    sync_to_supabase_escalation(
         astro_id=alert.astronaut_id,
         state="ACKNOWLEDGED",
         recipient_crew_id=payload.crew_member_callsign,
@@ -274,7 +275,7 @@ def trigger_manual_emergency(
         emergency_contact_callsign=contact_info["emergency_contact_callsign"],
         emergency_contact_email=contact_info.get("emergency_contact_email"),
         emergency_contact_phone=contact_info.get("emergency_contact_phone"),
-        emergency_contact_role=contact_info.get("emergency_contact_role"),
+        emergency_contact_role=contact_info["emergency_contact_role"],
         source="MANUAL_DRILL",
         requires_action=True
     )
@@ -282,7 +283,7 @@ def trigger_manual_emergency(
     db.commit()
     db.refresh(alert)
 
-    sync_to_firestore_escalation(
+    sync_to_supabase_escalation(
         astro_id=astronaut_id,
         state="PENDING_ACK",
         recipient_crew_id=contact_info["emergency_contact_callsign"],
