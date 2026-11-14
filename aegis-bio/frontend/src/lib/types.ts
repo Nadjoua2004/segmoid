@@ -161,7 +161,7 @@ export interface HealthMetrics {
 export interface EmergencyAlert {
   alert_id: string;
   astronaut_id: string;
-  severity: "WARNING" | "HIGH_ALERT" | "CRITICAL_ESCALATION";
+  severity: "WARNING" | "HIGH_ALERT" | "CRITICAL_ESCALATION" | string;
   hazard_origin: string;
   message: string;
   suggested_crew_actions: string[];
@@ -169,6 +169,37 @@ export interface EmergencyAlert {
   acknowledged: boolean;
   acknowledged_by?: string | null;
   acknowledged_at?: string | null;
+  override_notes?: string | null;
+  status?: "PENDING_OWNER" | "ACKNOWLEDGED_BY_OWNER" | "SWITCHED_TO_EMERGENCY_CONTACT" | "ACKNOWLEDGED_BY_CONTACT" | "RESOLVED" | string;
+  timeout_seconds?: number;
+  timeout_at?: string | null;
+  remaining_seconds?: number | null;
+  emergency_contact_name?: string | null;
+  emergency_contact_callsign?: string | null;
+  emergency_contact_email?: string | null;
+  emergency_contact_phone?: string | null;
+  emergency_contact_role?: string | null;
+  emergency_contact_notified_at?: string | null;
+  source?: string;
+  requires_action?: boolean;
+  owner_answered?: boolean;
+  prediction_data?: any;
+}
+
+export interface UserProfile {
+  id: number;
+  username: string;
+  email: string;
+  full_name: string;
+  callsign: string;
+  role: string;
+  emergency_contact_name: string;
+  emergency_contact_callsign: string;
+  emergency_contact_email?: string | null;
+  emergency_contact_phone?: string | null;
+  emergency_contact_role?: string | null;
+  alert_timeout_seconds: number;
+  created_at: string;
 }
 
 export interface EmergencyAckRequest {

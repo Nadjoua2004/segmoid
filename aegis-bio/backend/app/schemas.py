@@ -62,24 +62,7 @@ class HealthMetricsResponse(HealthMetrics):
 # ---------------------------------------------------------
 # CLASSIFIER 1: Metric-Level Severity Schemas (NORMAL, MEDIUM, CRITICAL)
 # ---------------------------------------------------------
-class MetricEvaluation(BaseModel):
-    metric_name: str
-    label: str
-    value: float
-    unit: str
-    status: str  # "NORMAL", "MEDIUM", "CRITICAL"
-    nominal_range: str
-    deviation: str
-    clinical_note: str
-
-class MetricClassificationReport(BaseModel):
-    astronaut_id: str
-    mission_day: int
-    highest_severity: str  # "NORMAL", "MEDIUM", "CRITICAL"
-    metrics: Dict[str, MetricEvaluation]
-    critical_count: int
-    medium_count: int
-    normal_count: int
+from app.services.metric_classifier import MetricEvaluation, MetricClassificationReport
 
 # ---------------------------------------------------------
 # CLASSIFIER 2: Multi-Hazard Spaceflight Triage Schemas
@@ -135,7 +118,61 @@ class PredictionResult(BaseModel):
     r2_fit_quality: float = Field(..., ge=0, le=1)
 
 # ---------------------------------------------------------
-# Intra-Crew Emergency Escalation Schemas
+# Authentication & Crew Contact Schemas
+# ---------------------------------------------------------
+class UserRegister(BaseModel):
+    username: str = Field(..., min_length=3, max_length=64, description="Unique username")
+    email: str = Field(..., description="NASA/Spaceflight email address")
+    password: str = Field(..., min_length=6, description="Account password")
+    full_name: str = Field(..., description="Full Astronaut Name (e.g. Cmdr. Elena Vance)")
+    callsign: str = Field(..., description="Spacecraft / telemetry callsign (e.g. ASTRO-01)")
+    role: Optional[str] = Field(default="Astronaut", description="Operational role on mission")
+    
+    # Chosen Emergency Contact in Authentication
+    emergency_contact_name: str = Field(..., description="Name of designated emergency contact")
+    emergency_contact_callsign: str = Field(..., description="Callsign of designated emergency contact (e.g. ASTRO-02)")
+    emergency_contact_email: Optional[str] = Field(default=None, description="Contact email")
+    emergency_contact_phone: Optional[str] = Field(default=None, description="Contact comms channel / phone")
+    emergency_contact_role: Optional[str] = Field(default="Crew Medical Officer", description="Role of emergency contact")
+    alert_timeout_seconds: Optional[int] = Field(default=60, ge=10, le=3600, description="Seconds before unacknowledged alert switches to emergency contact")
+
+class UserLogin(BaseModel):
+    username_or_email: str = Field(..., description="Username or email")
+    password: str = Field(..., description="Password")
+
+class UserResponse(BaseModel):
+    id: int
+    username: str
+    email: str
+    full_name: str
+    callsign: str
+    role: str
+    emergency_contact_name: str
+    emergency_contact_callsign: str
+    emergency_contact_email: Optional[str] = None
+    emergency_contact_phone: Optional[str] = None
+    emergency_contact_role: Optional[str] = None
+    alert_timeout_seconds: int = 60
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserResponse
+
+class UpdateEmergencyContactRequest(BaseModel):
+    emergency_contact_name: str
+    emergency_contact_callsign: str
+    emergency_contact_email: Optional[str] = None
+    emergency_contact_phone: Optional[str] = None
+    emergency_contact_role: Optional[str] = "Crew Medical Officer"
+    alert_timeout_seconds: Optional[int] = Field(default=60, ge=10, le=3600)
+
+# ---------------------------------------------------------
+# Intra-Crew Emergency Escalation & Alarm Schemas
 # ---------------------------------------------------------
 class EmergencyAlert(BaseModel):
     alert_id: str
@@ -148,11 +185,37 @@ class EmergencyAlert(BaseModel):
     acknowledged: bool = False
     acknowledged_by: Optional[str] = None
     acknowledged_at: Optional[datetime] = None
+    override_notes: Optional[str] = None
+
+    # Alarm Escalation & Emergency Contact Routing Fields
+    status: str = Field(default="PENDING_OWNER", description="PENDING_OWNER, ACKNOWLEDGED_BY_OWNER, SWITCHED_TO_EMERGENCY_CONTACT, ACKNOWLEDGED_BY_CONTACT, RESOLVED")
+    timeout_seconds: int = Field(default=60, description="Timeout before escalation to emergency contact")
+    timeout_at: Optional[datetime] = Field(default=None, description="Absolute UTC timestamp when alert switches")
+    remaining_seconds: Optional[int] = Field(default=None, description="Seconds left before switching to emergency contact")
+    emergency_contact_name: Optional[str] = None
+    emergency_contact_callsign: Optional[str] = None
+    emergency_contact_email: Optional[str] = None
+    emergency_contact_phone: Optional[str] = None
+    emergency_contact_role: Optional[str] = None
+    emergency_contact_notified_at: Optional[datetime] = None
+    source: str = Field(default="SYSTEM", description="Origin of alarm (e.g. HEALTH_PREDICTOR_AGENT)")
+    requires_action: bool = True
+    owner_answered: bool = False
+    prediction_data: Optional[Dict[str, Any]] = None
 
 class EmergencyAckRequest(BaseModel):
     alert_id: str
     crew_member_callsign: str
     override_notes: Optional[str] = None
+
+class EmergencyOwnerAnswerRequest(BaseModel):
+    alert_id: str
+    notes: Optional[str] = Field(default=None, description="Owner's response/acknowledgment notes")
+
+class EmergencyContactAckRequest(BaseModel):
+    alert_id: str
+    contact_callsign: str
+    intervention_notes: Optional[str] = Field(default=None, description="Emergency contact intervention or rescue notes")
 
 # ---------------------------------------------------------
 # Interactive RAG Chat Schemas

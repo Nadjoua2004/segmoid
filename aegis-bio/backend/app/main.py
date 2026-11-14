@@ -10,12 +10,14 @@ from app.database import init_db, SessionLocal
 from app.services.seeder import seed_initial_telemetry
 
 # Import API Routers
+from app.api.auth import router as auth_router
 from app.api.metrics import router as metrics_router
 from app.api.triage import router as triage_router
 from app.api.predict import router as predict_router
 from app.api.emergency import router as emergency_router
 from app.api.chat import router as chat_router
 from app.api.otel_routes import router as otel_router
+from app.services.auth_service import seed_default_users_if_empty
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -36,16 +38,18 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup():
-    """Initializes SQLite database tables and seeds baseline 30-day Artemis telemetry."""
+    """Initializes SQLite database tables, default crew authentication profiles, and baseline 30-day Artemis telemetry."""
     init_db()
     db = SessionLocal()
     try:
         count = seed_initial_telemetry(db)
+        seed_default_users_if_empty(db)
         print(f"[Aegis-Bio Startup] Database ready. Active telemetry records: {count}")
     finally:
         db.close()
 
 # Register API Routers
+app.include_router(auth_router)
 app.include_router(metrics_router)
 app.include_router(triage_router)
 app.include_router(predict_router)

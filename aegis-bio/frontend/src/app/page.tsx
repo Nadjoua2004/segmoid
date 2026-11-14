@@ -212,6 +212,7 @@ export default function MissionDashboard() {
           alert={emergencyAlert}
           onAcknowledge={handleEmergencyAck}
           onTriggerDrill={handleTriggerDrill}
+          onRefresh={loadDashboardData}
         />
 
         {/* -------------------------------------------------------------

@@ -11,6 +11,7 @@ from app.models import TelemetryLog
 from app.schemas import PredictionResult
 from app.services.predictor import calculate_trajectory_forecast
 from app.services.seeder import seed_initial_telemetry
+from app.services.alarm_service import create_alarm_from_prediction
 
 router = APIRouter(prefix="/api/predict", tags=["Predictive Forecasting"])
 
@@ -50,8 +51,37 @@ def predict_7_day_trajectory(
         for r in records
     ]
     
-    return calculate_trajectory_forecast(
+    result = calculate_trajectory_forecast(
         history_records=history,
         astronaut_id=astronaut_id,
         horizon_days=horizon_days
     )
+
+    # Check if regression indicates critical strain / dangerous threshold
+    if result.cardiovascular_strain_score >= 65.0 or result.cognitive_degradation_risk >= 75.0 or result.critical_inflection_day is not None:
+        prediction_dict = {
+            "health_outlook": "CRITICAL_DRIFT" if result.critical_inflection_day else "ELEVATED_STRAIN",
+            "cardiovascular_strain_score": result.cardiovascular_strain_score,
+            "cognitive_fatigue_risk": result.cognitive_degradation_risk,
+            "hypoxia_eclss_risk": 0.0,
+            "radiation_hazard_index": 0.0,
+            "projected_trajectory": [
+                {
+                    "sol": p.day,
+                    "sol_label": f"Sol {p.day}",
+                    "status": "CRITICAL" if p.cardiovascular_strain_index >= 65.0 else "NORMAL"
+                }
+                for p in result.projected_trajectory
+            ],
+            "clinical_directives": [
+                {
+                    "category": "Vital Trend Alert",
+                    "urgency": "IMMEDIATE",
+                    "action": f"Critical inflection projected at Sol {result.critical_inflection_day}. Initiate medical review.",
+                    "reference": "NASA SP-2009-3405"
+                }
+            ] if result.critical_inflection_day else []
+        }
+        create_alarm_from_prediction(db, astronaut_id or "ASTRO-7702-HELENA", prediction_dict)
+
+    return result

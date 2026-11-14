@@ -71,6 +71,57 @@ export const api = {
     });
   },
 
+  async answerAlarmAsOwner(alertId: string, notes?: string): Promise<{ success: boolean; message: string; alert: EmergencyAlert }> {
+    return request<{ success: boolean; message: string; alert: EmergencyAlert }>("/api/emergency/answer-owner", {
+      method: "POST",
+      body: JSON.stringify({ alert_id: alertId, notes }),
+    });
+  },
+
+  async acknowledgeAsEmergencyContact(alertId: string, contactCallsign: string, interventionNotes?: string): Promise<EmergencyAlert> {
+    return request<EmergencyAlert>("/api/emergency/contact-ack", {
+      method: "POST",
+      body: JSON.stringify({
+        alert_id: alertId,
+        contact_callsign: contactCallsign,
+        intervention_notes: interventionNotes,
+      }),
+    });
+  },
+
+  async checkEmergencyTimeout(): Promise<EmergencyAlert[]> {
+    return request<EmergencyAlert[]>("/api/emergency/check-timeout", {
+      method: "POST",
+    });
+  },
+
+  // -------------------------------------------------------------
+  // Astronaut Authentication & Emergency Contact Settings
+  // -------------------------------------------------------------
+  async loginAstronaut(usernameOrEmail: string, password: string): Promise<any> {
+    return request<any>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username_or_email: usernameOrEmail, password }),
+    });
+  },
+
+  async registerAstronaut(payload: any): Promise<any> {
+    return request<any>("/api/auth/register", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async getMyProfile(token?: string): Promise<any> {
+    return request<any>("/api/auth/me", {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  },
+
+  async getAvailableCrewContacts(): Promise<{ contacts: any[]; count: number }> {
+    return request<{ contacts: any[]; count: number }>("/api/auth/crew-contacts");
+  },
+
   async queryFlightSurgeon(query: string, astronautId: string = "ASTRO-01"): Promise<ChatMessage> {
     return request<ChatMessage>("/api/chat/query", {
       method: "POST",

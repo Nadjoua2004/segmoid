@@ -4,11 +4,14 @@ Provides endpoints for crew profiles, weekly sliding window telemetry,
 OpenTelemetry ResourceMetrics formatted export, and Health Predictor Agent forecasts.
 """
 from typing import Optional, Dict, Any
-from fastapi import APIRouter, HTTPException, Query, Body
+from fastapi import APIRouter, HTTPException, Query, Body, Depends
+from sqlalchemy.orm import Session
 
+from app.database import get_db
 from app.services.data_loader import data_loader
 from app.services.otel_collector import otel_collector
 from app.services.health_predictor_agent import health_predictor_agent
+from app.services.alarm_service import create_alarm_from_prediction, model_to_emergency_alert_schema
 
 router = APIRouter(prefix="/api/otel", tags=["OpenTelemetry & Weekly Health"])
 
@@ -49,12 +52,16 @@ def get_weekly_metrics(astronaut_id: str, week_number: int):
 def predict_upcoming_health(
     astronaut_id: str = Query("ASTRO-01"),
     week_number: int = Query(1),
-    forecast_days: int = Query(7, ge=1, le=14)
+    forecast_days: int = Query(7, ge=1, le=14),
+    db: Session = Depends(get_db)
 ):
     """
     Health Predictor Agent:
     Ingests 7-day historical telemetry + spacecraft environment (stress, oxygen, CO2, radiation).
     Projects the upcoming 7 days of astronaut health and risk outlook.
+    If the agent predicts a dangerous or critical condition that requires action,
+    it autonomously creates and sends an intra-crew alarm with a dead-man's switch
+    that will escalate to the chosen emergency contact if not answered in time.
     """
     weekly_data = data_loader.get_weekly_telemetry(astronaut_id, week_number)
     if not weekly_data:
@@ -64,6 +71,18 @@ def predict_upcoming_health(
         )
 
     prediction = health_predictor_agent.predict_upcoming_health(weekly_data, forecast_days)
+
+    # Autonomous Alarm Dispatch on Dangerous/Critical Prediction
+    alarm = create_alarm_from_prediction(db, astronaut_id, prediction)
+    if alarm:
+        prediction["alarm_triggered"] = True
+        prediction["alarm_id"] = alarm.alert_id
+        prediction["alarm_details"] = model_to_emergency_alert_schema(alarm).model_dump()
+    else:
+        prediction["alarm_triggered"] = False
+        prediction["alarm_id"] = None
+        prediction["alarm_details"] = None
+
     return prediction
 
 @router.post("/ingest", summary="OpenTelemetry Metrics Receiver")
