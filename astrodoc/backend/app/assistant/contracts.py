@@ -181,3 +181,4 @@ class ChatResponse(BaseModel):
     red_flag: Optional[RedFlagInfo] = None
     crew_alert_triggered: bool = False
     notice: Optional[str] = None    # e.g. "AI wording unavailable - offline mode"
+    transcript: Optional[str] = None  # voice messages: what Whisper heard (show it as the user's bubble)

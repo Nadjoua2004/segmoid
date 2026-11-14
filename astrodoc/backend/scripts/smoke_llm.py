@@ -72,5 +72,20 @@ show(r)
 check("Critical reported", r.level == "Critical" and "critical" in r.reply.lower())
 check("storm shelter mentioned", "shelter" in r.reply.lower())
 
+print("\n== Voice (Whisper speech-to-text)")
+from app.assistant.stt import SpeechToText  # noqa: E402
+
+stt = SpeechToText()
+if stt.available:
+    clip = ROOT / "tests" / "audio" / "eva_question.wav"
+    t = stt.transcribe(clip.read_bytes(), clip.name, "audio/wav")
+    print(f"  heard ({t.model}): {t.text}")
+    check("transcript mentions EVA", "eva" in t.text.lower())
+    provider.day = 47
+    r = bot.chat("sara", t.text)
+    check("voice question answered, sleep logged", any(lm.metric == "sleep_h" for lm in r.logged))
+else:
+    print("  skipped: no speech-to-text host configured")
+
 print(f"\n{sum(results)}/{len(results)} checks passed")
 sys.exit(0 if all(results) else 1)

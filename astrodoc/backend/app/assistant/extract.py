@@ -41,8 +41,39 @@ SYMPTOMS = ["headache", "nausea", "dizzy", "dizziness", "vomiting", "back pain",
             "sore throat", "muscle pain", "chills", "rash", "eye pain", "chest pain", "short of breath"]
 
 
+_UNITS = {w: i for i, w in enumerate(
+    "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
+    "sixteen seventeen eighteen nineteen".split())}
+_TENS = {w: 10 * i for i, w in enumerate("twenty thirty forty fifty sixty seventy eighty ninety".split(), start=2)}
+_NUM_WORD = "|".join(list(_UNITS) + list(_TENS) + ["hundred"])
+_NUM_PHRASE = re.compile(rf"\b(?:{_NUM_WORD})(?:(?:[\s-]+(?:and[\s-]+)?|[\s-]+point[\s-]+)(?:{_NUM_WORD}))*\b")
+
+
+def _phrase_to_number(phrase: str) -> str:
+    whole, decimals, in_decimal = 0, "", False
+    for w in re.split(r"[\s-]+", phrase):
+        if w == "and":
+            continue
+        if w == "point":
+            in_decimal = True
+        elif in_decimal:
+            decimals += str(_UNITS.get(w, 0))
+        elif w in _UNITS:
+            whole += _UNITS[w]
+        elif w in _TENS:
+            whole += _TENS[w]
+        elif w == "hundred":
+            whole = (whole or 1) * 100
+    return f"{whole}.{decimals}" if decimals else str(whole)
+
+
+def numbers_to_digits(text: str) -> str:
+    """'one hundred and twenty' -> '120', 'thirty eight point five' -> '38.5' (speech transcripts)."""
+    return _NUM_PHRASE.sub(lambda m: _phrase_to_number(m.group(0)), text)
+
+
 def extract_measurements(text: str) -> list[Extracted]:
-    t = text.lower().replace("’", "'")
+    t = numbers_to_digits(text.lower().replace("’", "'"))
     found: dict[str, Extracted] = {}
     m = _BP.search(t)
     if m:

@@ -76,6 +76,8 @@ Notes:
 |---|---|
 | `POST /api/chat/greet` `{astronaut_id, use_llm?: false, offline?}` | When a triage comes back Warning/Critical: open the panel and play the sound. It returns instantly; it doesn't call the LLM unless `use_llm` is set. |
 | `POST /api/chat` `{astronaut_id, message, history: [{role, content}], offline?}` | Each message. Send the earlier turns of the panel as `history`. |
+| `POST /api/chat/voice` (multipart: `audio` file, `astronaut_id`, `history` as JSON string, `offline`) | Voice message. Whisper (open-source, on Groq) transcribes it, then it goes through the same path as `/api/chat`: red flags, knowledge base, logging. The response is a `ChatResponse` with `transcript` set; show it as the user's bubble. Errors: 422 (no speech detected), 413 (over 10 MB), 503 (speech service unavailable, so offer typing). |
+| `POST /api/transcribe` (multipart `audio`) | Speech to text only, e.g. to fill the daily check-in form by voice. Returns `{text}`. |
 | `POST /api/chat/alert-crew` `{astronaut_id, reason?}` | "Alert crew now" button |
 | `GET /api/countermeasures?hazard=&topic=&level=` | Countermeasure cards for the dashboard |
 | `GET /api/knowledge/search?q=&k=` | Optional: browse the knowledge base |
@@ -97,6 +99,7 @@ interface ChatResponse {
   red_flag: { id: string; label: string; matched: string } | null;
   crew_alert_triggered: boolean;
   notice: string | null;               // e.g. "AI wording unavailable - offline mode."
+  transcript: string | null;           // voice messages only: what Whisper heard
 }
 ```
 
@@ -105,7 +108,7 @@ How to render it:
 - Show a "demo protocol" tag on cards where `demo_protocol` is true.
 - When `red_flag` is set, use the red styling and put the "Alert crew now" action first.
 - The `acknowledge` action should call your `POST /api/alerts/{id}/ack`.
-- Microphone and read-aloud use the browser's Web Speech API. Remove `[S1]` markers before reading aloud.
+- Microphone: record with `MediaRecorder` (webm/opus in Chrome and Edge, ogg in Firefox) and POST it to `/api/chat/voice`. When `GET /api/assistant/status` returns `stt_available: false`, fall back to the browser's Web Speech API. Read-aloud uses `speechSynthesis`; remove `[S1]` markers before reading.
 - `backend/app/assistant/static/chat_dev.html` is a working reference for all of the above.
 
 ## Behavior summary

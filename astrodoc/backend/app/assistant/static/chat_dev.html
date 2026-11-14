@@ -35,6 +35,8 @@
   form { display:flex; gap:8px; margin-top:16px; position:sticky; bottom:0; background:var(--bg); padding:10px 0; }
   form input { flex:1; }
   .notice { color:var(--warn); font-size:12px; }
+  #mic.rec { border-color:var(--crit); color:#ffb4b4; animation:pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity:.55; } }
   @media (max-width:600px){ header{gap:8px} .me{max-width:95%} }
 </style>
 </head>
@@ -102,7 +104,8 @@ async function init() {
   const st = await api('/api/mock/state');
   $('#astro').innerHTML = st.crew.map(a => `<option value="${a.id}">${esc(a.name)} – ${esc(a.role)}</option>`).join('');
   const s = await api('/api/assistant/status');
-  $('#status').textContent = `LLM: ${s.llm_available ? s.model : 'offline'} · retriever: ${s.retriever} (${s.kb_chunks} chunks)`;
+  serverSTT = !!s.stt_available;
+  $('#status').textContent = `LLM: ${s.llm_available ? s.model : 'offline'} · voice: ${serverSTT ? s.stt_model : 'browser'} · retriever: ${s.retriever} (${s.kb_chunks} chunks)`;
   await greet();
 }
 
@@ -119,9 +122,59 @@ $('#f').onsubmit = async e => {
     render(res);
   } catch (err) { render({reply: 'Error: ' + err.message, mode: 'error'}); }
 };
+// ---- Voice: record -> POST /api/chat/voice (Whisper on the server) -> reply.
+// Falls back to the browser's own speech recognition when server STT is unavailable.
+let serverSTT = false, recorder = null, chunks = [], stopTimer = null;
+const MAX_RECORD_MS = 30000;
+const pickMime = () => ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/webm', 'audio/mp4']
+  .find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
+
+async function sendVoice(blob, ext) {
+  const pending = document.createElement('div'); pending.className = 'msg me'; pending.textContent = '🎤 transcribing…';
+  $('#log').appendChild(pending);
+  const fd = new FormData();
+  fd.append('audio', blob, 'speech.' + ext);
+  fd.append('astronaut_id', $('#astro').value);
+  fd.append('history', JSON.stringify(history));
+  fd.append('offline', $('#offline').checked);
+  try {
+    const r = await fetch('/api/chat/voice', {method: 'POST', body: fd});
+    const res = await r.json();
+    if (!r.ok) throw new Error(res.detail || r.statusText);
+    pending.textContent = '🎤 ' + res.transcript;
+    history.push({role: 'user', content: res.transcript}, {role: 'assistant', content: res.reply});
+    render(res);
+  } catch (err) { pending.textContent = '🎤 (not understood)'; render({reply: 'Voice error: ' + err.message, mode: 'error'}); }
+}
+
+async function startRecording() {
+  const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+  const mime = pickMime();
+  recorder = new MediaRecorder(stream, mime ? {mimeType: mime} : undefined);
+  chunks = [];
+  recorder.ondataavailable = e => e.data.size && chunks.push(e.data);
+  recorder.onstop = () => {
+    stream.getTracks().forEach(t => t.stop());
+    clearTimeout(stopTimer);
+    $('#mic').textContent = '🎤'; $('#mic').classList.remove('rec');
+    const type = recorder.mimeType || 'audio/webm';
+    const ext = type.includes('ogg') ? 'ogg' : type.includes('mp4') ? 'm4a' : 'webm';
+    sendVoice(new Blob(chunks, {type}), ext);
+    recorder = null;
+  };
+  recorder.start();
+  $('#mic').textContent = '■ stop'; $('#mic').classList.add('rec');
+  stopTimer = setTimeout(() => recorder && recorder.stop(), MAX_RECORD_MS);
+}
+
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-$('#mic').onclick = () => {
-  if (!SR) return alert('Speech recognition is not supported in this browser (try Chrome or Edge).');
+$('#mic').onclick = async () => {
+  if (recorder) return recorder.stop();
+  if (serverSTT && navigator.mediaDevices && window.MediaRecorder) {
+    try { return await startRecording(); }
+    catch (e) { alert('Microphone unavailable: ' + e.message); return; }
+  }
+  if (!SR) return alert('Voice input needs server transcription or a browser with speech recognition (Chrome/Edge).');
   const r = new SR(); r.lang = 'en-US'; r.onresult = e => { $('#q').value = e.results[0][0].transcript; $('#f').requestSubmit(); }; r.start();
 };
 init().catch(e => render({reply: 'Failed to start: ' + e.message, mode: 'error'}));
