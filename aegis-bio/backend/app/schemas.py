@@ -1,6 +1,6 @@
 """
 Pydantic Schemas for Aegis-Bio
-Data validation for Telemetry, Triage, RAG Chat, Forecasting, and Emergency Escalation.
+Data validation for Telemetry, Dual-Classifier Triage, RAG Chat, Forecasting, and Emergency Escalation.
 """
 from datetime import datetime
 from typing import List, Optional, Dict, Any
@@ -29,6 +29,7 @@ class HealthMetrics(BaseModel):
     # Extended Aerospace Biometrics
     core_temp_c: Optional[float] = Field(default=36.9, ge=34.0, le=42.0, description="Core body temperature in Celsius")
     hrv_rmssd: Optional[float] = Field(default=42.0, ge=5.0, le=200.0, description="Heart Rate Variability RMSSD (ms)")
+    cabin_co2_mmhg: Optional[float] = Field(default=2.8, ge=0.0, le=15.0, description="Cabin ppCO2 partial pressure (mmHg)")
     subjective_notes: Optional[str] = Field(default="", description="Astronaut reported symptoms or notes")
 
     class Config:
@@ -46,6 +47,7 @@ class HealthMetrics(BaseModel):
                 "mood_score": 4,
                 "core_temp_c": 36.8,
                 "hrv_rmssd": 45.2,
+                "cabin_co2_mmhg": 2.8,
                 "subjective_notes": "Mild vestibular adaptation sensation after lunar EVA egress."
             }
         }
@@ -58,7 +60,29 @@ class HealthMetricsResponse(HealthMetrics):
         from_attributes = True
 
 # ---------------------------------------------------------
-# NASA 5 Hazard & Triage Schemas
+# CLASSIFIER 1: Metric-Level Severity Schemas (NORMAL, MEDIUM, CRITICAL)
+# ---------------------------------------------------------
+class MetricEvaluation(BaseModel):
+    metric_name: str
+    label: str
+    value: float
+    unit: str
+    status: str  # "NORMAL", "MEDIUM", "CRITICAL"
+    nominal_range: str
+    deviation: str
+    clinical_note: str
+
+class MetricClassificationReport(BaseModel):
+    astronaut_id: str
+    mission_day: int
+    highest_severity: str  # "NORMAL", "MEDIUM", "CRITICAL"
+    metrics: Dict[str, MetricEvaluation]
+    critical_count: int
+    medium_count: int
+    normal_count: int
+
+# ---------------------------------------------------------
+# CLASSIFIER 2: Multi-Hazard Spaceflight Triage Schemas
 # ---------------------------------------------------------
 class HazardBreakdown(BaseModel):
     radiation_score: float = Field(..., ge=0, le=100, description="Risk Score: Space Radiation (GCR + SPE)")
@@ -70,7 +94,7 @@ class HazardBreakdown(BaseModel):
 class Countermeasure(BaseModel):
     id: str
     title: str
-    category: str  # "Radiation Protection", "Cardiovascular Reconditioning", "Circadian/Sleep", "Clinical Pharma"
+    category: str
     urgency: str   # "IMMEDIATE", "WITHIN_4H", "ROUTINE"
     protocol: str
     nasa_hrp_reference: str
@@ -85,6 +109,7 @@ class TriageResult(BaseModel):
     countermeasures: List[Countermeasure]
     requires_emergency_escalation: bool
     ai_rationale: str
+    metric_evaluations: Optional[Dict[str, MetricEvaluation]] = None
     evaluated_at: datetime = Field(default_factory=datetime.utcnow)
 
 # ---------------------------------------------------------
@@ -115,7 +140,7 @@ class PredictionResult(BaseModel):
 class EmergencyAlert(BaseModel):
     alert_id: str
     astronaut_id: str
-    severity: str  # "WARNING", "HIGH_ALERT", "CRITICAL_ESCALATION"
+    severity: str
     hazard_origin: str
     message: str
     suggested_crew_actions: List[str]
@@ -147,7 +172,7 @@ class ProactiveChatPayload(BaseModel):
     generated_at: datetime = Field(default_factory=datetime.utcnow)
 
 class ChatMessage(BaseModel):
-    role: str  # "user", "assistant", "system"
+    role: str
     content: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     citations: Optional[List[str]] = None

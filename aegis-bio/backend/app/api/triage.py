@@ -1,13 +1,10 @@
 """
 Triage & Multi-Hazard Spaceflight Classification API
-Evaluates astronaut telemetry against NASA's 5 Spaceflight Hazards:
-1. Space Radiation (SPE / GCR)
-2. Microgravity / Gravity Fields (Cardiovascular deconditioning & fluid shift)
-3. Isolation & Confinement (Circadian disruption & psychological strain)
-4. Distance from Earth (Autonomous decision support requirement)
-5. Hostile Closed Environment (Life support interactions & hypoxia/hypercapnia)
+Dual-Classifier Architecture:
+- CLASSIFIER 1: Metric-Level Severity Classifier (Evaluates if each metric is NORMAL, MEDIUM, or CRITICAL)
+- CLASSIFIER 2: Multi-Hazard Spaceflight Triage Classifier (Evaluates NASA's 5 Spaceflight Hazards & Prescribes Countermeasures)
 """
-from typing import Optional
+from typing import Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from datetime import datetime
@@ -19,25 +16,62 @@ from app.schemas import (
     TriageResult,
     HazardBreakdown,
     Countermeasure,
+    MetricClassificationReport,
 )
+from app.services.metric_classifier import metric_classifier
 from app.services.seeder import seed_initial_telemetry
 
-router = APIRouter(prefix="/api/triage", tags=["Clinical Triage & Hazard Scoring"])
+router = APIRouter(prefix="/api/triage", tags=["Clinical Triage & Classifiers"])
 
+# -------------------------------------------------------------
+# CLASSIFIER 1: Individual Metric Severity Evaluation
+# -------------------------------------------------------------
+@router.post("/classify-metrics", response_model=MetricClassificationReport)
+def classify_individual_metrics(metrics: HealthMetrics):
+    """
+    CLASSIFIER 1:
+    Evaluates every single physiological and environmental metric.
+    Classifies each into 'NORMAL', 'MEDIUM', or 'CRITICAL' with reference ranges
+    and deviation scores per NASA-STD-3001 guidelines.
+    """
+    raw_dict = metrics.dict()
+    return metric_classifier.evaluate_all_metrics(
+        metrics_dict=raw_dict,
+        astronaut_id=metrics.astronaut_id,
+        mission_day=metrics.mission_day
+    )
+
+# -------------------------------------------------------------
+# CLASSIFIER 2: Multi-Hazard Spaceflight Triage Engine
+# -------------------------------------------------------------
 def evaluate_multi_hazard_triage(metrics: HealthMetrics) -> TriageResult:
     """
-    Core rule-based & hazard scoring algorithm.
-    Evaluates physiological telemetry against aerospace thresholds.
+    CLASSIFIER 2:
+    Evaluates holistic multi-hazard risk against NASA's 5 Spaceflight Hazards:
+    1. Space Radiation (SPE / GCR)
+    2. Microgravity / Gravity Fields (Cardiovascular Deconditioning & Fluid Shifts)
+    3. Isolation & Confinement (Circadian Disruption & Behavioral Health)
+    4. Distance from Earth (24-Min Communication Latency & Autonomy Transfer)
+    5. Hostile Closed Environment (Life Support, Cabin ppCO2, and Hypoxemia)
     """
+    # 1. Run Classifier 1 on all metrics
+    metric_report = metric_classifier.evaluate_all_metrics(
+        metrics_dict=metrics.dict(),
+        astronaut_id=metrics.astronaut_id,
+        mission_day=metrics.mission_day
+    )
+    metric_evals = metric_report.metrics
     clinical_flags = []
     countermeasures = []
-    
+
     # -------------------------------------------------------------
     # 1. HAZARD: Space Radiation (GCR + SPE)
     # Threshold: > 20 mSv/day = Critical Solar Particle Event (SPE)
     # -------------------------------------------------------------
+    rad_eval = metric_evals.get("radiation_msv")
     rad_dose = metrics.radiation_msv
-    if rad_dose >= 20.0:
+    
+    if rad_dose >= 20.0 or (rad_eval and rad_eval.status == "CRITICAL"):
         rad_score = 98.0
         clinical_flags.append("CRITICAL: Solar Particle Event (SPE) detected (>20 mSv/day). Acute radiation sickness threat.")
         countermeasures.append(
@@ -46,7 +80,7 @@ def evaluate_multi_hazard_triage(metrics: HealthMetrics) -> TriageResult:
                 title="Immediate Storm Shelter Ingress",
                 category="Radiation Protection",
                 urgency="IMMEDIATE",
-                protocol="Direct astronaut immediately into the water-jacketed central habitat storm shelter. Seal airlock.",
+                protocol="Direct astronaut immediately into water-jacketed central habitat storm shelter. Seal airlock.",
                 nasa_hrp_reference="NASA-STD-3001 Vol 1 §4.3 (Acute Radiation Exposure Countermeasures)"
             )
         )
@@ -56,42 +90,41 @@ def evaluate_multi_hazard_triage(metrics: HealthMetrics) -> TriageResult:
                 title="Radioprotectant Pharmaceutical Protocol",
                 category="Clinical Pharma",
                 urgency="IMMEDIATE",
-                protocol="Administer Oral N-acetylcysteine (NAC) 1200 mg and subcutaneous Granulocyte colony-stimulating factor (G-CSF) if dosimeter exceeds 500 mSv.",
+                protocol="Administer Oral N-acetylcysteine (NAC) 1200 mg and subcutaneous Granulocyte colony-stimulating factor (G-CSF).",
                 nasa_hrp_reference="NASA HRP-47053 Space Radiation Medical Evidence"
             )
         )
-    elif rad_dose >= 5.0:
+    elif rad_dose >= 2.0 or (rad_eval and rad_eval.status == "MEDIUM"):
         rad_score = 65.0
-        clinical_flags.append("WARNING: Elevated ambient radiation flux (>5 mSv/day). Exceeds nominal Artemis baseline.")
+        clinical_flags.append("WARNING: Elevated ambient radiation flux (>2 mSv/day). Exceeds nominal Artemis baseline.")
         countermeasures.append(
             Countermeasure(
                 id="CM-RAD-EVA-03",
                 title="Immediate EVA Abort / Postponement",
                 category="Radiation Protection",
                 urgency="WITHIN_4H",
-                protocol="Cancel all planned Extravehicular Activity. Confine crew to shielded lunar habitat modules.",
+                protocol="Cancel all planned Extravehicular Activity. Confine crew to shielded habitat modules.",
                 nasa_hrp_reference="NASA Flight Rule A13-11: Solar Radiation Monitoring"
             )
         )
-    elif rad_dose >= 1.5:
-        rad_score = 35.0
-        clinical_flags.append("ADVISORY: Moderate GCR background flux rise.")
     else:
         rad_score = 12.0
 
     # -------------------------------------------------------------
-    # 2. HAZARD: Microgravity / Gravity Fields (Cardiovascular Deconditioning)
+    # 2. HAZARD: Microgravity (Cardiovascular Deconditioning)
     # Threshold: Resting HR > 115 bpm or BP > 140/90 mmHg
     # -------------------------------------------------------------
     hr = metrics.heart_rate
     sys = metrics.bp_sys
     dia = metrics.bp_dia
-    
+    hr_eval = metric_evals.get("heart_rate")
+    bp_eval = metric_evals.get("bp_sys")
+
     micrograv_score = 15.0
-    if hr > 115.0 or sys > 140.0 or dia > 90.0:
+    if hr > 115.0 or sys > 140.0 or dia > 90.0 or (hr_eval and hr_eval.status == "CRITICAL"):
         micrograv_score = 88.0
         clinical_flags.append(
-            f"CRITICAL: Microgravity Cardiovascular Deconditioning (HR: {hr:.0f} bpm, BP: {sys:.0f}/{dia:.0f} mmHg). Cephalad fluid shift & sympathetic overload."
+            f"CRITICAL: Microgravity Cardiovascular Deconditioning (HR: {hr:.0f} bpm, BP: {sys:.0f}/{dia:.0f} mmHg). Cephalad fluid shift & autonomic overload."
         )
         countermeasures.append(
             Countermeasure(
@@ -99,7 +132,7 @@ def evaluate_multi_hazard_triage(metrics: HealthMetrics) -> TriageResult:
                 title="Lower Body Negative Pressure (LBNP) Suit",
                 category="Cardiovascular Reconditioning",
                 urgency="IMMEDIATE",
-                protocol="Seat astronaut in Chibis-M / LBNP apparatus at -35 mmHg for 45 minutes to draw venous pool caudad.",
+                protocol="Seat astronaut in LBNP apparatus at -35 mmHg for 45 minutes to draw venous pool caudad.",
                 nasa_hrp_reference="NASA SP-2009-3405 Human Adaptation to Spaceflight"
             )
         )
@@ -109,11 +142,11 @@ def evaluate_multi_hazard_triage(metrics: HealthMetrics) -> TriageResult:
                 title="Electrolyte-Supported Oral Hydration Loading",
                 category="Cardiovascular Reconditioning",
                 urgency="WITHIN_4H",
-                protocol="Ingest 1.2 L isotonic electrolyte solution with 8.0 g NaCl tabs over 90 minutes to restore effective circulating plasma volume.",
+                protocol="Ingest 1.2 L isotonic electrolyte solution with 8.0 g NaCl tabs over 90 minutes.",
                 nasa_hrp_reference="NASA-STD-3001 Vol 2 §8.2.2.1"
             )
         )
-    elif hr > 95.0 or sys > 130.0 or dia > 85.0:
+    elif hr > 90.0 or sys > 130.0 or dia > 85.0 or (hr_eval and hr_eval.status == "MEDIUM"):
         micrograv_score = 50.0
         clinical_flags.append("ELEVATED: Sub-acute resting tachycardia / orthostatic pre-intolerance.")
         countermeasures.append(
@@ -133,12 +166,14 @@ def evaluate_multi_hazard_triage(metrics: HealthMetrics) -> TriageResult:
     # -------------------------------------------------------------
     sleep = metrics.sleep_hours
     mood = metrics.mood_score
+    sleep_eval = metric_evals.get("sleep_hours")
+    mood_eval = metric_evals.get("mood_score")
     isolation_score = 15.0
-    
-    if sleep < 4.5 and mood <= 2:
+
+    if (sleep < 4.5 and mood <= 2) or (sleep_eval and sleep_eval.status == "CRITICAL" and mood_eval and mood_eval.status == "CRITICAL"):
         isolation_score = 90.0
         clinical_flags.append(
-            f"CRITICAL: Acute Circadian Disruption & Severe Behavioral Fatigue (Sleep: {sleep:.1f}h, Mood: {mood}/5). High risk of cognitive performance failure."
+            f"CRITICAL: Acute Circadian Disruption & Behavioral Fatigue (Sleep: {sleep:.1f}h, Mood: {mood}/5). High risk of cognitive performance failure."
         )
         countermeasures.append(
             Countermeasure(
@@ -146,7 +181,7 @@ def evaluate_multi_hazard_triage(metrics: HealthMetrics) -> TriageResult:
                 title="Mandatory Crew Rest & Task Stood-down Protocol",
                 category="Circadian/Sleep",
                 urgency="IMMEDIATE",
-                protocol="Stand down astronaut from critical robotics, piloting, and EVA ops for 12 hours. Enforce dark quiet sleep block.",
+                protocol="Stand down astronaut from critical robotics, piloting, and EVA ops for 12 hours.",
                 nasa_hrp_reference="NASA Behavioral Health and Performance (BHP) Standard 14.1"
             )
         )
@@ -156,46 +191,46 @@ def evaluate_multi_hazard_triage(metrics: HealthMetrics) -> TriageResult:
                 title="Dynamic Solid-State Circadian Light Therapy",
                 category="Circadian/Sleep",
                 urgency="WITHIN_4H",
-                protocol="Calibrate crew quarter solid-state SSL lighting: 460 nm blue-enriched (dimmed during pre-sleep, elevated upon awakening).",
+                protocol="Calibrate solid-state lighting: 460 nm blue-enriched light upon waking block.",
                 nasa_hrp_reference="NASA TM-2020-5008149 Spaceflight Lighting Protocols"
             )
         )
-    elif sleep < 5.5 or mood <= 3:
+    elif sleep < 6.0 or mood <= 3 or (sleep_eval and sleep_eval.status == "MEDIUM"):
         isolation_score = 45.0
         clinical_flags.append(f"WARNING: Moderate cumulative sleep deficit ({sleep:.1f}h logged).")
 
     # -------------------------------------------------------------
-    # 4. HAZARD: Distance from Earth
-    # Fixed base risk reflecting 18.5 - 24 min latency autonomous requirement
+    # 4. HAZARD: Distance from Earth (24m Comm Latency)
     # -------------------------------------------------------------
-    distance_score = 55.0  # Deep space / lunar surface environment baseline
+    distance_score = 55.0
 
     # -------------------------------------------------------------
-    # 5. HAZARD: Hostile Closed Environment
-    # Ingest SpO2 & Core Temperature
+    # 5. HAZARD: Hostile Closed Environment (ECLSS, SpO2, CO2)
     # -------------------------------------------------------------
     spo2 = metrics.spo2
+    co2 = metrics.cabin_co2_mmhg or 2.8
+    spo2_eval = metric_evals.get("spo2")
+    co2_eval = metric_evals.get("cabin_co2_mmhg")
     hostile_env_score = 15.0
-    if spo2 < 93.0:
-        hostile_env_score = 85.0
-        clinical_flags.append(f"CRITICAL: Arterial Hypoxemia (SpO2: {spo2:.1f}%). Possible ECLSS habitat scrubber failure or pulmonary atelectasis.")
+
+    if spo2 < 93.0 or co2 >= 4.5 or (spo2_eval and spo2_eval.status == "CRITICAL"):
+        hostile_env_score = 88.0
+        clinical_flags.append(f"CRITICAL: Arterial Hypoxemia / Cabin CO2 ({spo2:.1f}% SpO2, {co2:.1f} mmHg CO2).")
         countermeasures.append(
             Countermeasure(
                 id="CM-ECLSS-O2-01",
                 title="Supplemental O2 Nasal Cannula & Habitat CO2 Purge",
                 category="Hostile Closed Environment",
                 urgency="IMMEDIATE",
-                protocol="Administer 3 L/min medical O2 via nasal cannula. Verify cabin ppCO2 < 2.0 mmHg; swap LiOH canisters if indicated.",
+                protocol="Administer 3 L/min medical O2 via nasal cannula. Purge ECLSS LiOH scrubber canisters.",
                 nasa_hrp_reference="NASA Space Medicine Clinical Practice Guideline #8"
             )
         )
-    elif spo2 < 96.0:
-        hostile_env_score = 40.0
+    elif spo2 < 96.0 or co2 >= 3.0 or (spo2_eval and spo2_eval.status == "MEDIUM"):
+        hostile_env_score = 45.0
         clinical_flags.append(f"ADVISORY: Marginal blood oxygen saturation ({spo2:.1f}%).")
 
-    # -------------------------------------------------------------
-    # Overall Score & Status Computation
-    # -------------------------------------------------------------
+    # Overall Multi-Hazard Score
     overall_risk_score = round(
         0.35 * rad_score +
         0.30 * micrograv_score +
@@ -217,10 +252,9 @@ def evaluate_multi_hazard_triage(metrics: HealthMetrics) -> TriageResult:
         overall_status = "NOMINAL"
 
     ai_rationale = (
-        f"Autonomous Triage evaluated 5 Spaceflight Hazards on Sol {metrics.mission_day}. "
-        f"Overall Risk: {overall_risk_score}/100 [{overall_status}]. "
-        f"{len(clinical_flags)} physiological flags raised. "
-        f"Immediate autonomous countermeasures generated per NASA Human Research Program protocols."
+        f"Dual-Classifier Triage: Evaluated {len(metric_evals)} individual metrics. "
+        f"Found {metric_report.critical_count} CRITICAL, {metric_report.medium_count} MEDIUM, {metric_report.normal_count} NORMAL. "
+        f"Multi-Hazard Risk: {overall_risk_score}/100 [{overall_status}]."
     )
 
     return TriageResult(
@@ -239,15 +273,13 @@ def evaluate_multi_hazard_triage(metrics: HealthMetrics) -> TriageResult:
         countermeasures=countermeasures,
         requires_emergency_escalation=requires_emergency,
         ai_rationale=ai_rationale,
+        metric_evaluations=metric_evals,
         evaluated_at=datetime.utcnow()
     )
 
 @router.post("/classify", response_model=TriageResult)
 def classify_triage_metrics(metrics: HealthMetrics):
-    """
-    Classify a specific telemetry payload against NASA 5-hazard thresholds
-    and generate real-time countermeasures.
-    """
+    """Executes Dual-Classifier Triage: returns both metric severity and spaceflight hazard triage."""
     return evaluate_multi_hazard_triage(metrics)
 
 @router.get("/current", response_model=TriageResult)
@@ -255,9 +287,7 @@ def get_current_triage_status(
     astronaut_id: Optional[str] = "ASTRO-7702-HELENA",
     db: Session = Depends(get_db)
 ):
-    """
-    Evaluates triage status using the most recent telemetry stored in the database.
-    """
+    """Evaluates triage status using latest telemetry in the database."""
     count = db.query(TelemetryLog).count()
     if count == 0:
         seed_initial_telemetry(db)

@@ -1,5 +1,8 @@
 /**
  * TypeScript type definitions mirroring backend Pydantic schemas for Aegis-Bio
+ * Includes Dual-Classifier types:
+ * 1. Metric-level severity classifier (NORMAL, MEDIUM, CRITICAL)
+ * 2. Multi-hazard spaceflight triage classifier
  */
 
 export interface HealthMetrics {
@@ -16,6 +19,7 @@ export interface HealthMetrics {
   mood_score: number;
   core_temp_c?: number;
   hrv_rmssd?: number;
+  cabin_co2_mmhg?: number;
   subjective_notes?: string;
 }
 
@@ -24,6 +28,33 @@ export interface HealthMetricsResponse extends HealthMetrics {
   created_at: string;
 }
 
+// -------------------------------------------------------------
+// CLASSIFIER 1: Metric-Level Severity (NORMAL, MEDIUM, CRITICAL)
+// -------------------------------------------------------------
+export interface MetricEvaluation {
+  metric_name: string;
+  label: string;
+  value: number;
+  unit: string;
+  status: "NORMAL" | "MEDIUM" | "CRITICAL";
+  nominal_range: string;
+  deviation: string;
+  clinical_note: string;
+}
+
+export interface MetricClassificationReport {
+  astronaut_id: string;
+  mission_day: number;
+  highest_severity: "NORMAL" | "MEDIUM" | "CRITICAL";
+  metrics: Record<string, MetricEvaluation>;
+  critical_count: number;
+  medium_count: number;
+  normal_count: number;
+}
+
+// -------------------------------------------------------------
+// CLASSIFIER 2: Multi-Hazard Spaceflight Triage
+// -------------------------------------------------------------
 export interface HazardBreakdown {
   radiation_score: number;
   microgravity_score: number;
@@ -51,6 +82,7 @@ export interface TriageResult {
   countermeasures: Countermeasure[];
   requires_emergency_escalation: boolean;
   ai_rationale: string;
+  metric_evaluations?: Record<string, MetricEvaluation>;
   evaluated_at: string;
 }
 
