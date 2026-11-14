@@ -23,7 +23,7 @@ import {
   TriageResult,
   PredictionResult,
   EmergencyAlert,
-  HealthMetrics,
+  DailyCheckInPayload,
 } from "@/lib/types";
 import { api } from "@/lib/api";
 
@@ -79,9 +79,12 @@ export default function MissionDashboard() {
   }, [loadDashboardData]);
 
   // Handle astronaut daily check-in submission
-  const handleCheckInSubmit = async (payload: HealthMetrics) => {
-    await api.ingestMetrics(payload);
-    await loadDashboardData();
+  // Returns the saved record (with advice flags) so the modal can show the result;
+  // the dashboard refresh runs in the background.
+  const handleCheckInSubmit = async (payload: DailyCheckInPayload) => {
+    const record = await api.submitDailyCheckIn(payload);
+    void loadDashboardData();
+    return record;
   };
 
   // Handle intra-crew emergency acknowledgment
@@ -561,6 +564,7 @@ export default function MissionDashboard() {
         onClose={() => setIsCheckInOpen(false)}
         onSubmit={handleCheckInSubmit}
         currentMissionDay={currentMissionDay}
+        previousMetrics={latestMetrics}
       />
 
       <ProactiveChatDrawer

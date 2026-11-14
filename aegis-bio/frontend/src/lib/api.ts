@@ -11,23 +11,44 @@ import {
   EmergencyAckRequest,
   ChatMessage,
   ProactiveChatPayload,
+  DailyCheckInPayload,
+  DailyCheckInRecord,
+  HealthAssessment,
 } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+/** Error carrying the HTTP status and FastAPI `detail`, so callers can react to e.g. 409 / 422. */
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly endpoint: string,
+    public readonly detail: unknown
+  ) {
+    super(`API Error [${status}] ${endpoint}: ${typeof detail === "string" ? detail : JSON.stringify(detail)}`);
+    this.name = "ApiError";
+  }
+}
+
 async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const url = `${API_BASE}${endpoint}`;
   const response = await fetch(url, {
+    ...options,
     headers: {
       "Content-Type": "application/json",
       ...(options?.headers || {}),
     },
-    ...options,
   });
 
   if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`API Error [${response.status}] ${endpoint}: ${errorBody}`);
+    const text = await response.text();
+    let detail: unknown = text;
+    try {
+      detail = JSON.parse(text)?.detail ?? text;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new ApiError(response.status, endpoint, detail);
   }
 
   return response.json();
@@ -48,6 +69,28 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     });
+  },
+
+  // Daily Check-in (full self-report; vitals also feed telemetry/triage)
+  async submitDailyCheckIn(payload: DailyCheckInPayload): Promise<DailyCheckInRecord> {
+    return request<DailyCheckInRecord>("/api/checkins", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  /** ML assessment of a check-in without saving it (preview / what-if). */
+  async classifyDailyCheckIn(payload: DailyCheckInPayload): Promise<HealthAssessment> {
+    return request<HealthAssessment>("/api/checkins/classify", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async listDailyCheckIns(astronautId = "ASTRO-7702-HELENA", limit = 30): Promise<DailyCheckInRecord[]> {
+    return request<DailyCheckInRecord[]>(
+      `/api/checkins?astronaut_id=${encodeURIComponent(astronautId)}&limit=${limit}`
+    );
   },
 
   // Triage & Spaceflight Hazard Classification

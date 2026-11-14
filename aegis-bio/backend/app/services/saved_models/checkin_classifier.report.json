@@ -1,0 +1,308 @@
+{
+  "model_version": "1.0.0",
+  "trained_at": "2026-11-14T21:24:28+00:00",
+  "sklearn_version": "1.9.1",
+  "data": {
+    "source": "synthetic (app/ml/synthetic.py)",
+    "n_samples": 14000,
+    "seed": 42,
+    "split": {
+      "train": 9800,
+      "val": 2100,
+      "test": 2100
+    }
+  },
+  "n_features": 44,
+  "status": {
+    "selected_model": "hist_gradient_boosting",
+    "calibration": "isotonic",
+    "validation_macro_f1": {
+      "random_forest": 0.8746,
+      "hist_gradient_boosting": 0.8915
+    },
+    "test_accuracy": 0.8976,
+    "test_macro_f1": 0.8909,
+    "test_log_loss": 0.2775,
+    "labels": [
+      "NOMINAL",
+      "WATCH",
+      "CRITICAL"
+    ],
+    "confusion_matrix": [
+      [
+        707,
+        41,
+        1
+      ],
+      [
+        111,
+        463,
+        29
+      ],
+      [
+        1,
+        32,
+        715
+      ]
+    ],
+    "per_class": {
+      "NOMINAL": {
+        "precision": 0.8632,
+        "recall": 0.9439,
+        "f1-score": 0.9018,
+        "support": 749.0
+      },
+      "WATCH": {
+        "precision": 0.8638,
+        "recall": 0.7678,
+        "f1-score": 0.813,
+        "support": 603.0
+      },
+      "CRITICAL": {
+        "precision": 0.9597,
+        "recall": 0.9559,
+        "f1-score": 0.9578,
+        "support": 748.0
+      }
+    },
+    "top_features": [
+      {
+        "feature": "radiation_msv",
+        "importance": 0.1138
+      },
+      {
+        "feature": "cabin_co2_mmhg",
+        "importance": 0.0673
+      },
+      {
+        "feature": "mood_score",
+        "importance": 0.0468
+      },
+      {
+        "feature": "cabin_temp_c",
+        "importance": 0.0465
+      },
+      {
+        "feature": "core_temp_c",
+        "importance": 0.0456
+      },
+      {
+        "feature": "sleep_hours",
+        "importance": 0.0375
+      },
+      {
+        "feature": "calories_kcal",
+        "importance": 0.0358
+      },
+      {
+        "feature": "hrv_rmssd",
+        "importance": 0.0296
+      },
+      {
+        "feature": "bp_dia",
+        "importance": 0.0278
+      },
+      {
+        "feature": "symptom_vision_change",
+        "importance": 0.022
+      }
+    ],
+    "critical_recall": 0.9559
+  },
+  "concern": {
+    "selected_model": "hist_gradient_boosting",
+    "calibration": "isotonic",
+    "validation_macro_f1": {
+      "random_forest": 0.9169,
+      "hist_gradient_boosting": 0.9244
+    },
+    "test_accuracy": 0.9181,
+    "test_macro_f1": 0.9235,
+    "test_log_loss": 0.3367,
+    "labels": [
+      "NONE",
+      "RADIATION",
+      "CARDIOVASCULAR",
+      "FLUID_SHIFT_SANS",
+      "SLEEP_BEHAVIORAL",
+      "CABIN_ENVIRONMENT",
+      "INFECTION",
+      "NUTRITION_HYDRATION"
+    ],
+    "confusion_matrix": [
+      [
+        710,
+        0,
+        2,
+        19,
+        5,
+        3,
+        3,
+        7
+      ],
+      [
+        0,
+        197,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      [
+        14,
+        0,
+        178,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      [
+        43,
+        0,
+        0,
+        148,
+        0,
+        1,
+        0,
+        3
+      ],
+      [
+        13,
+        0,
+        1,
+        1,
+        176,
+        0,
+        1,
+        0
+      ],
+      [
+        9,
+        0,
+        0,
+        0,
+        0,
+        189,
+        0,
+        0
+      ],
+      [
+        20,
+        0,
+        0,
+        2,
+        3,
+        0,
+        165,
+        0
+      ],
+      [
+        17,
+        0,
+        1,
+        0,
+        0,
+        1,
+        2,
+        165
+      ]
+    ],
+    "per_class": {
+      "NONE": {
+        "precision": 0.8596,
+        "recall": 0.9479,
+        "f1-score": 0.9016,
+        "support": 749.0
+      },
+      "RADIATION": {
+        "precision": 1.0,
+        "recall": 1.0,
+        "f1-score": 1.0,
+        "support": 197.0
+      },
+      "CARDIOVASCULAR": {
+        "precision": 0.978,
+        "recall": 0.9223,
+        "f1-score": 0.9493,
+        "support": 193.0
+      },
+      "FLUID_SHIFT_SANS": {
+        "precision": 0.8706,
+        "recall": 0.759,
+        "f1-score": 0.811,
+        "support": 195.0
+      },
+      "SLEEP_BEHAVIORAL": {
+        "precision": 0.9565,
+        "recall": 0.9167,
+        "f1-score": 0.9362,
+        "support": 192.0
+      },
+      "CABIN_ENVIRONMENT": {
+        "precision": 0.9742,
+        "recall": 0.9545,
+        "f1-score": 0.9643,
+        "support": 198.0
+      },
+      "INFECTION": {
+        "precision": 0.9593,
+        "recall": 0.8684,
+        "f1-score": 0.9116,
+        "support": 190.0
+      },
+      "NUTRITION_HYDRATION": {
+        "precision": 0.9429,
+        "recall": 0.8871,
+        "f1-score": 0.9141,
+        "support": 186.0
+      }
+    },
+    "top_features": [
+      {
+        "feature": "radiation_msv",
+        "importance": 0.1562
+      },
+      {
+        "feature": "cabin_co2_mmhg",
+        "importance": 0.0782
+      },
+      {
+        "feature": "core_temp_c",
+        "importance": 0.0672
+      },
+      {
+        "feature": "cabin_temp_c",
+        "importance": 0.0555
+      },
+      {
+        "feature": "calories_kcal",
+        "importance": 0.0339
+      },
+      {
+        "feature": "symptom_vision_change",
+        "importance": 0.0257
+      },
+      {
+        "feature": "heart_rate",
+        "importance": 0.0155
+      },
+      {
+        "feature": "mood_score",
+        "importance": 0.0137
+      },
+      {
+        "feature": "total_exercise_minutes",
+        "importance": 0.0136
+      },
+      {
+        "feature": "sleep_hours",
+        "importance": 0.013
+      }
+    ]
+  },
+  "notes": "Labels are simulated, not clinician-assigned. Generated with AI assistance (Claude). Re-train on real, clinically labelled data before operational use."
+}

@@ -142,3 +142,102 @@ export interface ProactiveChatPayload {
   reference_guidelines: string[];
   generated_at: string;
 }
+
+// -------------------------------------------------------------
+// DAILY CHECK-IN (mirrors backend DailyCheckInCreate / DailyCheckInRead)
+// -------------------------------------------------------------
+export type GlucoseContext = "fasting" | "post_meal" | "random";
+
+export type SymptomKey =
+  | "headache"
+  | "nasal_congestion"
+  | "vision_change"
+  | "back_pain"
+  | "nausea"
+  | "puffy_face"
+  | "dizziness"
+  | "muscle_joint_pain"
+  | "fatigue"
+  | "trouble_concentrating"
+  | "shortness_of_breath"
+  | "skin_irritation";
+
+export interface DailyCheckInPayload {
+  astronaut_id: string;
+  mission_day: number;
+  /** YYYY-MM-DD (local date) */
+  checkin_date: string;
+  vitals: {
+    heart_rate: number;
+    bp_sys: number;
+    bp_dia: number;
+    spo2: number;
+    core_temp_c: number;
+    blood_glucose: number;
+    glucose_context: GlucoseContext;
+    hrv_rmssd: number;
+  };
+  sleep: {
+    /** HH:MM */
+    bedtime: string;
+    wake_time: string;
+    sleep_hours: number;
+    sleep_quality: number;
+    sleep_medication: boolean;
+  };
+  wellbeing: { mood_score: number; energy_level: number; stress_level: number };
+  exercise: { cardio_minutes: number; resistance_minutes: number };
+  nutrition: {
+    calories_kcal: number;
+    water_liters: number;
+    breakfast: boolean;
+    lunch: boolean;
+    dinner: boolean;
+    vitamin_d_taken: boolean;
+  };
+  environment: {
+    radiation_msv: number;
+    radiation_badge_worn: boolean;
+    cabin_temp_c: number;
+    cabin_co2_mmhg: number;
+    ear_protection_used: boolean;
+  };
+  symptoms: SymptomKey[];
+}
+
+export interface CheckInFlag {
+  code: string;
+  severity: "INFO" | "MEDIUM" | "CRITICAL";
+  message: string;
+}
+
+export type AssessmentStatus = "NOMINAL" | "WATCH" | "CRITICAL";
+
+/** Output of the ML daily check-in classifier (backend HealthAssessment). */
+export interface HealthAssessment {
+  status: AssessmentStatus;
+  model_status: AssessmentStatus;
+  status_confidence: number;
+  safety_override: boolean;
+  safety_reasons: string[];
+  primary_concern: string;
+  concern_label: string;
+  hazard: string;
+  /** null when a safety rule (not the model) determined the concern */
+  concern_confidence: number | null;
+  top_concerns: { concern: string; label: string; probability: number }[];
+  key_factors: { factor: string; value: string; impact: number }[];
+  model_version: string;
+  disclaimer: string;
+}
+
+export interface DailyCheckInRecord extends DailyCheckInPayload {
+  id: number;
+  telemetry_log_id: number;
+  created_at: string;
+  sleep: DailyCheckInPayload["sleep"] & { time_in_bed_hours: number };
+  exercise: DailyCheckInPayload["exercise"] & { total_minutes: number };
+  flags: CheckInFlag[];
+  /** null if the classifier model was unavailable when the check-in was saved */
+  assessment: HealthAssessment | null;
+}
