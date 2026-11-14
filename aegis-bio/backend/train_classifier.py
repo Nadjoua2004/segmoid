@@ -14,9 +14,22 @@ from sklearn.metrics import classification_report, accuracy_score
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-# Define paths
 BASE_DIR = Path(__file__).resolve().parent
-DATA_PATH = BASE_DIR.parent / "data" / "deep_space_crew_telemetry_large.csv"
+
+# Check potential data locations
+DATA_CANDIDATES = [
+    BASE_DIR.parent.parent / "data" / "deep_space_crew_telemetry_large.csv",
+    BASE_DIR.parent / "data" / "deep_space_crew_telemetry_large.csv",
+    Path("data/deep_space_crew_telemetry_large.csv"),
+    Path("../data/deep_space_crew_telemetry_large.csv")
+]
+
+DATA_PATH = None
+for candidate in DATA_CANDIDATES:
+    if candidate.exists():
+        DATA_PATH = candidate
+        break
+
 MODEL_DIR = BASE_DIR / "app" / "services" / "saved_models"
 MODEL_PATH = MODEL_DIR / "triage_classifier.joblib"
 
@@ -31,8 +44,8 @@ FEATURES = [
 ]
 
 def train_triage_model():
-    if not DATA_PATH.exists():
-        print(f"Data file not found at: {DATA_PATH}")
+    if not DATA_PATH or not DATA_PATH.exists():
+        print(f"Data file not found. Checked: {[str(c) for c in DATA_CANDIDATES]}")
         return
 
     print(f"[Training Pipeline] Loading dataset: {DATA_PATH}")
@@ -41,10 +54,6 @@ def train_triage_model():
 
     # Features and Targets
     X = df[FEATURES].copy()
-    y_status = df["status"]
-    y_hazard = df["primary_hazard"]
-
-    # Composite target: e.g. "CRITICAL__SPACE_RADIATION_SPE"
     y_composite = df["status"] + "__" + df["primary_hazard"]
 
     X_train, X_test, y_train, y_test = train_test_split(
