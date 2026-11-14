@@ -133,6 +133,9 @@ export const EmergencyBanner: React.FC<EmergencyBannerProps> = ({
               <span className="text-xs font-mono text-red-300 font-bold">
                 ALERT ID: {alert.alert_id}
               </span>
+              <span className="px-2 py-0.5 rounded bg-blue-950/80 border border-blue-700 text-[10px] font-mono text-blue-300 font-bold uppercase">
+                {alert.crew_name || "CREW-A"} • {alert.station_name || "STATION"}
+              </span>
               <span className="flex items-center text-[10px] font-mono text-red-200 bg-red-900/60 px-2 py-0.5 rounded border border-red-700">
                 <Radio className="w-3 h-3 mr-1" />
                 24-MIN EARTH LATENCY: AUTONOMOUS ESCALATION ACTIVE
@@ -142,12 +145,12 @@ export const EmergencyBanner: React.FC<EmergencyBannerProps> = ({
               {isSwitchedToContact ? (
                 <span className="flex items-center text-[10px] font-mono font-bold bg-amber-500/20 text-amber-300 px-2.5 py-0.5 rounded border border-amber-500">
                   <UserCheck className="w-3 h-3 mr-1 text-amber-400" />
-                  ESCALATED: SWITCHED TO CONTACT {alert.emergency_contact_callsign} ({alert.emergency_contact_name})
+                  ESCALATED: SWITCHED TO CLOSEST {alert.crew_name || "CREW"} RESPONDER ({alert.emergency_contact_name})
                 </span>
               ) : countdown !== null ? (
                 <span className="flex items-center text-[10px] font-mono font-bold bg-red-500/20 text-yellow-300 px-2.5 py-0.5 rounded border border-yellow-500/50 animate-pulse">
                   <Clock className="w-3 h-3 mr-1 text-yellow-400" />
-                  DEAD-MAN TIMEOUT: {countdown}s REMAINING BEFORE CONTACT SWITCH
+                  DEAD-MAN TIMEOUT: {countdown}s REMAINING BEFORE INTRA-CREW SWITCH
                 </span>
               ) : null}
             </div>
@@ -159,12 +162,14 @@ export const EmergencyBanner: React.FC<EmergencyBannerProps> = ({
             {/* Emergency Contact routing details */}
             {alert.emergency_contact_callsign && (
               <div className="mt-1 flex items-center text-xs font-mono text-slate-300 gap-1.5">
-                <span className="text-slate-400">Designated Emergency Contact:</span>
+                <span className="text-slate-400">Nearest {alert.crew_name || "Crew"} Responder:</span>
                 <span className="text-cyan-300 font-semibold">{alert.emergency_contact_name}</span>
                 <span className="px-1.5 py-0.2 rounded bg-cyan-950 border border-cyan-800 text-[10px] text-cyan-400">
                   {alert.emergency_contact_callsign}
                 </span>
-                <span className="text-[11px] text-slate-400">({alert.emergency_contact_role})</span>
+                {alert.emergency_contact_role && (
+                  <span className="text-[11px] text-slate-400">({alert.emergency_contact_role})</span>
+                )}
               </div>
             )}
 

@@ -15,26 +15,29 @@ from app.services.alarm_service import create_alarm_from_prediction
 
 router = APIRouter(prefix="/api/predict", tags=["Predictive Forecasting"])
 
-@router.post("/trajectory", response_model=PredictionResult)
+@router.post("/trajectory", response_model=Optional[PredictionResult])
 def predict_7_day_trajectory(
-    astronaut_id: Optional[str] = Query("ASTRO-7702-HELENA"),
-    horizon_days: int = Query(7, ge=1, le=14),
+    astronaut_id: Optional[str] = Query(None),
+    time_scale: str = Query("WEEKLY", description="DAILY (24-hour intra-sol), WEEKLY (7-day tactical), or MONTHLY (30-day mission)"),
+    horizon_days: int = Query(7, ge=1, le=30, description="Forecast steps: 24 for Daily, 7 for Weekly, 30 for Monthly"),
+    lookback_days: int = Query(30, ge=1, le=180, description="Historical telemetry window"),
     db: Session = Depends(get_db)
 ):
     """
-    Computes 7-day forward trajectory using polynomial & linear regression
-    on historical telemetry logs. Identifies early inflection points and
-    cardiovascular/cognitive strain indices.
+    Computes Daily (24h), Weekly (7d), or Monthly (30d) forward trajectory
+    using optimized Holt-Winters Damped Time-Series models on historical telemetry logs.
+    Identifies early inflection points and upcoming anomalies before they occur.
     """
-    count = db.query(TelemetryLog).count()
-    if count == 0:
-        seed_initial_telemetry(db)
+    query = db.query(TelemetryLog)
+    if astronaut_id:
+        query = query.filter(TelemetryLog.astronaut_id == astronaut_id)
 
-    records = db.query(TelemetryLog).filter(
-        TelemetryLog.astronaut_id == astronaut_id
-    ).order_by(TelemetryLog.mission_day.asc()).all()
+    records = query.order_by(TelemetryLog.mission_day.asc()).all()
+    if not records:
+        return None
+
+    records = records[-lookback_days:]
     
-    # Convert ORM records to dictionary format for dataframe processing
     history = [
         {
             "mission_day": r.mission_day,
@@ -54,7 +57,8 @@ def predict_7_day_trajectory(
     result = calculate_trajectory_forecast(
         history_records=history,
         astronaut_id=astronaut_id,
-        horizon_days=horizon_days
+        horizon_days=horizon_days,
+        time_scale=time_scale
     )
 
     # Check if regression indicates critical strain / dangerous threshold

@@ -31,62 +31,93 @@ HABITAT_MODULES = {
     "EVA_AIRLOCK":    {"name": "Surface EVA Airlock",          "x": 8.0,  "y": 0.0,  "z": 0.0},
 }
 
-# Current/latest known physical compartment and beacon coordinates per astronaut device
+# Current/latest known physical compartment, beacon coordinates, and assigned crew per astronaut device
 ASTRONAUT_DEVICE_LOCATIONS = {
+    # CREW A
     "ASTRO-01": {
         "callsign": "ASTRO-01",
-        "name": "Cmdr. Elena Vance",
-        "role": "Mission Commander",
+        "name": "cmdr_vance",
+        "crew_name": "CREW-A",
         "current_module": "CREW_QUARTERS",
         "x": -5.8, "y": 1.2, "z": 0.0,
     },
     "ASTRO-02": {
         "callsign": "ASTRO-02",
-        "name": "Dr. Marcus Chen",
-        "role": "Crew Medical Officer",
+        "name": "dr_chen",
+        "crew_name": "CREW-A",
         "current_module": "MED_BAY",
         "x": 4.2, "y": 1.8, "z": 0.0,
     },
     "ASTRO-03": {
         "callsign": "ASTRO-03",
-        "name": "Eng. Jan Kowalski",
-        "role": "Chief ECLSS Engineer",
+        "name": "eng_kowalski",
+        "crew_name": "CREW-A",
         "current_module": "ECLSS_SERVICE",
         "x": 0.2, "y": -7.8, "z": 0.0,
     },
-    "ASTRO-04": {
-        "callsign": "ASTRO-04",
-        "name": "Spec. Layla Al-Mansoor",
-        "role": "Navigation Specialist",
-        "current_module": "COMMAND_CORE",
-        "x": 0.5, "y": 0.4, "z": 0.0,
-    },
     "ASTRO-7702-HELENA": {
         "callsign": "ASTRO-7702-HELENA",
-        "name": "Helena Rostova",
-        "role": "Payload Specialist",
+        "name": "helena_astro",
+        "crew_name": "CREW-A",
         "current_module": "CREW_QUARTERS",
         "x": -6.0, "y": 1.0, "z": 0.0,
     },
+    # CREW B (Separate Team: even if physically closer, isolated from Crew A emergencies)
+    "ASTRO-05": {
+        "callsign": "ASTRO-05",
+        "name": "lead_okafor",
+        "crew_name": "CREW-B",
+        "current_module": "CREW_QUARTERS",
+        "x": -5.9, "y": 1.1, "z": 0.0,  # Extremely close (0.1m) to ASTRO-01, but in Crew B!
+    },
+    "ASTRO-06": {
+        "callsign": "ASTRO-06",
+        "name": "astro_lindqvist",
+        "crew_name": "CREW-B",
+        "current_module": "COMMAND_CORE",
+        "x": 0.5, "y": 0.4, "z": 0.0,
+    },
 }
 
-def find_closest_astronaut(victim_callsign: str, db: Optional[Session] = None) -> Dict[str, Any]:
+def find_closest_astronaut(
+    victim_callsign: str,
+    crew_name: Optional[str] = None,
+    db: Optional[Session] = None
+) -> Dict[str, Any]:
     """
     Finds the closest astronaut to the unresponsive victim's device using 3D Euclidean distance.
-    Evaluates habitat compartments and distance in meters.
+    STRICT CREW ISOLATION:
+    Only evaluates astronauts belonging to the victim's SAME CREW (e.g. Crew A members only).
+    Astronauts from Crew B are strictly excluded even if physically closer.
     """
+    # 1. Resolve victim location & crew
     victim_loc = ASTRONAUT_DEVICE_LOCATIONS.get(
         victim_callsign, ASTRONAUT_DEVICE_LOCATIONS["ASTRO-01"]
     )
+
+    resolved_crew = crew_name
+    if not resolved_crew and db:
+        user = db.query(UserModel).filter(
+            (UserModel.callsign == victim_callsign) | (UserModel.username == victim_callsign)
+        ).first()
+        if user:
+            resolved_crew = user.crew_name
+
+    if not resolved_crew:
+        resolved_crew = victim_loc.get("crew_name", "CREW-A")
+
+    resolved_crew = resolved_crew.upper()
     vx, vy, vz = victim_loc["x"], victim_loc["y"], victim_loc["z"]
 
+    # 2. Filter candidates strictly to the SAME CREW
     candidates = []
     for callsign, loc in ASTRONAUT_DEVICE_LOCATIONS.items():
         if callsign == victim_callsign:
             continue
-        # Avoid treating same person aliases as candidates
-        if victim_callsign.startswith("ASTRO-01") and callsign.startswith("ASTRO-01"):
-            continue
+        # Check crew boundary
+        candidate_crew = loc.get("crew_name", "CREW-A").upper()
+        if candidate_crew != resolved_crew:
+            continue  # IGNORE: Not in the victim's crew!
 
         # 3D Euclidean Distance: sqrt((x2-x1)^2 + (y2-y1)^2 + (z2-z1)^2)
         dist = math.sqrt(
@@ -98,7 +129,7 @@ def find_closest_astronaut(victim_callsign: str, db: Optional[Session] = None) -
             "distance": dist,
             "callsign": callsign,
             "name": loc["name"],
-            "role": loc["role"],
+            "crew_name": candidate_crew,
             "module": loc["current_module"],
             "module_name": HABITAT_MODULES.get(loc["current_module"], {}).get("name", loc["current_module"]),
         })
@@ -108,10 +139,11 @@ def find_closest_astronaut(victim_callsign: str, db: Optional[Session] = None) -
     if not candidates:
         return {
             "closest_callsign": "ASTRO-02",
-            "closest_name": "Dr. Marcus Chen",
-            "closest_role": "Crew Medical Officer",
+            "closest_name": "dr_chen",
+            "closest_crew": resolved_crew,
             "closest_module": "MED_BAY",
             "distance_meters": 4.5,
+            "victim_crew": resolved_crew,
             "victim_module": victim_loc["current_module"],
         }
 
@@ -119,31 +151,35 @@ def find_closest_astronaut(victim_callsign: str, db: Optional[Session] = None) -
     return {
         "closest_callsign": winner["callsign"],
         "closest_name": winner["name"],
-        "closest_role": winner["role"],
+        "closest_crew": winner["crew_name"],
         "closest_module": winner["module"],
         "closest_module_name": winner["module_name"],
         "distance_meters": round(winner["distance"], 1),
+        "victim_crew": resolved_crew,
         "victim_module": victim_loc["current_module"],
         "victim_module_name": HABITAT_MODULES.get(victim_loc["current_module"], {}).get("name", victim_loc["current_module"]),
     }
 
 def get_initial_emergency_contact(db: Session, astronaut_id: str) -> Dict[str, Any]:
     """
-    Look up designated initial responder or dynamically compute the closest astronaut.
+    Look up designated initial responder within the victim's crew.
     """
-    closest = find_closest_astronaut(astronaut_id, db)
     user = db.query(UserModel).filter(
         (UserModel.callsign == astronaut_id) | (UserModel.username == astronaut_id)
     ).first()
 
+    crew = user.crew_name if user else "CREW-A"
+    closest = find_closest_astronaut(astronaut_id, crew_name=crew, db=db)
     timeout_sec = user.alert_timeout_seconds if user else settings.DEFAULT_ALERT_TIMEOUT_SECONDS
+
     return {
         "emergency_contact_name": closest["closest_name"],
         "emergency_contact_callsign": closest["closest_callsign"],
-        "emergency_contact_email": f"{closest['closest_callsign'].lower()}@artemis.nasa.gov",
-        "emergency_contact_phone": f"COM-CHAN-{closest['closest_callsign']}",
-        "emergency_contact_role": f"{closest['closest_role']} ({closest['distance_meters']}m away in {closest['closest_module']})",
+        "emergency_contact_email": f"{closest['closest_name']}@{closest['closest_crew'].lower()}.station.local",
+        "emergency_contact_phone": f"COM-{closest['closest_crew']}-{closest['closest_callsign']}",
+        "emergency_contact_role": f"Nearest {closest['closest_crew']} Responder ({closest['distance_meters']}m away in {closest['closest_module']})",
         "alert_timeout_seconds": timeout_sec,
+        "crew_name": closest["closest_crew"],
         "user_id": user.id if user else None,
         "closest_info": closest,
     }
@@ -313,21 +349,22 @@ def check_and_escalate_alarms(db: Session) -> List[EmergencyAlertModel]:
 
     escalated = []
     for alert in pending_alerts:
-        # Dynamically determine the closest astronaut to the person's device right now!
-        closest = find_closest_astronaut(alert.astronaut_id, db)
+        # Dynamically determine the closest astronaut from the SAME CREW to the victim's device!
+        alert_crew = getattr(alert, "crew_name", "CREW-A") or "CREW-A"
+        closest = find_closest_astronaut(alert.astronaut_id, crew_name=alert_crew, db=db)
 
         alert.status = "SWITCHED_TO_EMERGENCY_CONTACT"
         alert.emergency_contact_callsign = closest["closest_callsign"]
         alert.emergency_contact_name = closest["closest_name"]
         alert.emergency_contact_role = (
-            f"{closest['closest_role']} (Nearest: {closest['distance_meters']}m away in {closest['closest_module_name']})"
+            f"Nearest {closest['closest_crew']} Responder ({closest['distance_meters']}m away in {closest['closest_module_name']})"
         )
         alert.emergency_contact_notified_at = now
         escalated.append(alert)
 
         reason = (
             f"OWNER UNRESPONSIVE in {closest['victim_module_name']}. "
-            f"Alert switched to closest astronaut: {closest['closest_name']} "
+            f"Alert switched to closest {closest['closest_crew']} astronaut: {closest['closest_name']} "
             f"({closest['closest_callsign']}, {closest['distance_meters']}m away in {closest['closest_module_name']})."
         )
 
@@ -463,6 +500,8 @@ def model_to_emergency_alert_schema(alert: EmergencyAlertModel) -> EmergencyAler
     return EmergencyAlert(
         alert_id=alert.alert_id,
         astronaut_id=alert.astronaut_id,
+        crew_name=getattr(alert, "crew_name", "CREW-A") or "CREW-A",
+        station_name=getattr(alert, "station_name", "LUNAR-BASE-ALPHA") or "LUNAR-BASE-ALPHA",
         severity=alert.severity,
         hazard_origin=alert.hazard_origin,
         message=alert.message,

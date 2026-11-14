@@ -1,20 +1,23 @@
 """
-Astronaut Authentication & Emergency Contact Configuration API
-Allows astronauts to register, choose their emergency contact, authenticate,
-and manage intra-crew dead-man's switch alert timeout settings.
+Astronaut Authentication & Crew Management API
+Designed for Deep-Space Offline-First Habitats:
+- Crew Lead creates the Crew and registers Station Information using username and key.
+- Crew Lead provisions Crew Members (username + key).
+- Astronauts authenticate using username and key.
+- Strict Crew-Isolation: Alarms route only within the victim's crew.
 """
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.models import UserModel
 from app.schemas import (
-    UserRegister,
+    CrewLeadRegister,
+    CrewMemberCreate,
     UserLogin,
     UserResponse,
-    TokenResponse,
-    UpdateEmergencyContactRequest
+    TokenResponse
 )
 from app.services.auth_service import (
     hash_password,
@@ -23,59 +26,52 @@ from app.services.auth_service import (
     get_current_user,
     seed_default_users_if_empty
 )
-from app.services.data_loader import data_loader
 
-router = APIRouter(prefix="/api/auth", tags=["Astronaut Authentication & Emergency Contact"])
+router = APIRouter(prefix="/api/auth", tags=["Station Crew Management & Auth"])
 
-@router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-def register_astronaut(
-    payload: UserRegister,
+@router.post("/register-lead", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
+def register_crew_lead(
+    payload: CrewLeadRegister,
     db: Session = Depends(get_db)
 ):
     """
-    Register a new astronaut profile with mandatory designated emergency contact.
-    In case of unacknowledged critical alarms, the alert automatically switches
-    to this designated contact after the alert_timeout_seconds window expires.
+    Crew Lead registers the Station and Crew using username and key.
+    Enables the Lead Management tab to provision team members.
     """
-    # Check if username or email already exists
-    existing_user = db.query(UserModel).filter(
-        (UserModel.username == payload.username) | (UserModel.email == payload.email)
-    ).first()
+    existing_user = db.query(UserModel).filter(UserModel.username == payload.username).first()
     if existing_user:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Username or email is already registered on this mission."
+            detail="Username is already registered on this station."
         )
 
-    # Create new user record
-    new_user = UserModel(
+    lead_user = UserModel(
         username=payload.username,
-        email=payload.email,
-        hashed_password=hash_password(payload.password),
-        full_name=payload.full_name,
-        callsign=payload.callsign,
-        role=payload.role or "Astronaut",
-        emergency_contact_name=payload.emergency_contact_name,
-        emergency_contact_callsign=payload.emergency_contact_callsign,
-        emergency_contact_email=payload.emergency_contact_email,
-        emergency_contact_phone=payload.emergency_contact_phone,
-        emergency_contact_role=payload.emergency_contact_role or "Crew Medical Officer",
-        alert_timeout_seconds=payload.alert_timeout_seconds or 60,
+        email=f"{payload.username}@{payload.crew_name.lower()}.station.local",
+        hashed_password=hash_password(payload.key),
+        callsign=payload.username.upper(),
+        crew_name=payload.crew_name.upper(),
+        station_name=payload.station_name.upper(),
+        is_lead=True,
         is_active=True
     )
-    db.add(new_user)
+    db.add(lead_user)
     db.commit()
-    db.refresh(new_user)
+    db.refresh(lead_user)
 
-    # Generate JWT session token
     token = create_access_token(
-        data={"sub": new_user.username, "callsign": new_user.callsign}
+        data={
+            "sub": lead_user.username,
+            "crew_name": lead_user.crew_name,
+            "station_name": lead_user.station_name,
+            "is_lead": True
+        }
     )
 
     return TokenResponse(
         access_token=token,
         token_type="bearer",
-        user=UserResponse.model_validate(new_user)
+        user=UserResponse.model_validate(lead_user)
     )
 
 @router.post("/login", response_model=TokenResponse)
@@ -84,31 +80,32 @@ def login_astronaut(
     db: Session = Depends(get_db)
 ):
     """
-    Authenticate an astronaut and return JWT token along with their emergency contact settings.
+    Authenticate an astronaut using username and key.
+    Runs locally on station edge node with zero internet lag.
     """
-    # Seed default users if table is empty
     seed_default_users_if_empty(db)
 
-    user = db.query(UserModel).filter(
-        (UserModel.username == payload.username_or_email) |
-        (UserModel.email == payload.username_or_email)
-    ).first()
-
-    if not user or not verify_password(payload.password, user.hashed_password):
+    user = db.query(UserModel).filter(UserModel.username == payload.username).first()
+    if not user or not verify_password(payload.key, user.hashed_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid flight credentials or callsign.",
+            detail="Invalid astronaut username or access key.",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
     if not user.is_active:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Astronaut profile is deactivated on mission roster."
+            detail="Astronaut credentials inactive on station roster."
         )
 
     token = create_access_token(
-        data={"sub": user.username, "callsign": user.callsign}
+        data={
+            "sub": user.username,
+            "crew_name": user.crew_name,
+            "station_name": user.station_name,
+            "is_lead": user.is_lead
+        }
     )
 
     return TokenResponse(
@@ -117,72 +114,64 @@ def login_astronaut(
         user=UserResponse.model_validate(user)
     )
 
+@router.post("/crew/members", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+def create_crew_member(
+    payload: CrewMemberCreate,
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Crew Lead provisions a new crew member for their crew and station.
+    Only requires username and key.
+    """
+    if not current_user.is_lead:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the Crew Lead can provision new crew members."
+        )
+
+    existing = db.query(UserModel).filter(UserModel.username == payload.username).first()
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Username '{payload.username}' is already in use."
+        )
+
+    member = UserModel(
+        username=payload.username,
+        email=f"{payload.username}@{current_user.crew_name.lower()}.station.local",
+        hashed_password=hash_password(payload.key),
+        callsign=payload.callsign or payload.username.upper(),
+        crew_name=current_user.crew_name,
+        station_name=current_user.station_name,
+        is_lead=False,
+        is_active=True
+    )
+    db.add(member)
+    db.commit()
+    db.refresh(member)
+
+    return UserResponse.model_validate(member)
+
+@router.get("/crew/members", response_model=List[UserResponse])
+def list_crew_members(
+    current_user: UserModel = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Lists all crew members belonging to the authenticated astronaut's crew and station.
+    """
+    members = db.query(UserModel).filter(
+        UserModel.crew_name == current_user.crew_name,
+        UserModel.is_active == True
+    ).all()
+    return [UserResponse.model_validate(m) for m in members]
+
 @router.get("/me", response_model=UserResponse)
 def get_current_astronaut_profile(
     current_user: UserModel = Depends(get_current_user)
 ):
     """
-    Get the authenticated astronaut's current profile, including chosen emergency contact
-    and countdown timeout window.
+    Get current logged in astronaut profile, crew, station, and lead status.
     """
     return UserResponse.model_validate(current_user)
-
-@router.put("/emergency-contact", response_model=UserResponse)
-def update_emergency_contact(
-    payload: UpdateEmergencyContactRequest,
-    current_user: UserModel = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """
-    Update the designated emergency contact who receives escalated critical alarms
-    if the astronaut becomes unresponsive.
-    """
-    current_user.emergency_contact_name = payload.emergency_contact_name
-    current_user.emergency_contact_callsign = payload.emergency_contact_callsign
-    current_user.emergency_contact_email = payload.emergency_contact_email
-    current_user.emergency_contact_phone = payload.emergency_contact_phone
-    current_user.emergency_contact_role = payload.emergency_contact_role or "Crew Medical Officer"
-    if payload.alert_timeout_seconds:
-        current_user.alert_timeout_seconds = payload.alert_timeout_seconds
-
-    db.commit()
-    db.refresh(current_user)
-    return UserResponse.model_validate(current_user)
-
-@router.get("/crew-contacts")
-def list_available_crew_contacts(db: Session = Depends(get_db)):
-    """
-    Returns available crew members who can be chosen as an Emergency Contact during sign-up or profile setup.
-    """
-    seed_default_users_if_empty(db)
-    members = data_loader.get_crew_members()
-    db_users = db.query(UserModel).filter(UserModel.is_active == True).all()
-
-    contacts = []
-    seen = set()
-
-    # From DB users
-    for u in db_users:
-        if u.callsign not in seen:
-            seen.add(u.callsign)
-            contacts.append({
-                "name": u.full_name,
-                "callsign": u.callsign,
-                "role": u.role,
-                "email": u.email,
-                "phone": u.emergency_contact_phone or f"HAB-COM-{u.callsign}"
-            })
-
-    # From static crew list
-    for m in members:
-        if m.get("id") not in seen:
-            seen.add(m.get("id"))
-            contacts.append({
-                "name": m.get("name"),
-                "callsign": m.get("id"),
-                "role": "Crew Member",
-                "email": f"{m.get('id').lower()}@artemis.nasa.gov",
-                "phone": f"HAB-COM-{m.get('id')}"
-            })
-
-    return {"contacts": contacts, "count": len(contacts)}

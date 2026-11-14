@@ -100,16 +100,22 @@ class TriageResult(BaseModel):
 # ---------------------------------------------------------
 class TrajectoryPoint(BaseModel):
     day: int
+    time_label: Optional[str] = Field(default=None, description="Granular time label, e.g. 'Hour +14' or 'Sol 35'")
     heart_rate_predicted: float
     spo2_predicted: float
     radiation_cumulative_predicted: float
     sleep_predicted: float
     cardiovascular_strain_index: float
     cognitive_readiness_index: float
+    lower_ci_heart_rate: Optional[float] = None
+    upper_ci_heart_rate: Optional[float] = None
 
 class PredictionResult(BaseModel):
     astronaut_id: str
+    time_scale: str = Field(default="WEEKLY", description="DAILY (24h), WEEKLY (7d), or MONTHLY (30d)")
     forecast_horizon_days: int = 7
+    horizon_steps: int = 7
+    model_used: str = "Holt-Winters Damped Time-Series"
     projected_trajectory: List[TrajectoryPoint]
     cardiovascular_strain_score: float = Field(..., ge=0, le=100)
     cognitive_degradation_risk: float = Field(..., ge=0, le=100)
@@ -118,40 +124,30 @@ class PredictionResult(BaseModel):
     r2_fit_quality: float = Field(..., ge=0, le=1)
 
 # ---------------------------------------------------------
-# Authentication & Crew Contact Schemas
+# Authentication & Crew Management Schemas
 # ---------------------------------------------------------
-class UserRegister(BaseModel):
-    username: str = Field(..., min_length=3, max_length=64, description="Unique username")
-    email: str = Field(..., description="NASA/Spaceflight email address")
-    password: str = Field(..., min_length=6, description="Account password")
-    full_name: str = Field(..., description="Full Astronaut Name (e.g. Cmdr. Elena Vance)")
-    callsign: str = Field(..., description="Spacecraft / telemetry callsign (e.g. ASTRO-01)")
-    role: Optional[str] = Field(default="Astronaut", description="Operational role on mission")
-    
-    # Chosen Emergency Contact in Authentication
-    emergency_contact_name: str = Field(..., description="Name of designated emergency contact")
-    emergency_contact_callsign: str = Field(..., description="Callsign of designated emergency contact (e.g. ASTRO-02)")
-    emergency_contact_email: Optional[str] = Field(default=None, description="Contact email")
-    emergency_contact_phone: Optional[str] = Field(default=None, description="Contact comms channel / phone")
-    emergency_contact_role: Optional[str] = Field(default="Crew Medical Officer", description="Role of emergency contact")
-    alert_timeout_seconds: Optional[int] = Field(default=60, ge=10, le=3600, description="Seconds before unacknowledged alert switches to emergency contact")
+class CrewLeadRegister(BaseModel):
+    username: str = Field(..., min_length=3, max_length=64, description="Lead astronaut username")
+    key: str = Field(..., min_length=4, description="Secret access key")
+    station_name: str = Field(..., description="Station or Habitat name (e.g. ARTEMIS-BASE-ALPHA)")
+    crew_name: str = Field(..., description="Crew identifier (e.g. CREW-A)")
+
+class CrewMemberCreate(BaseModel):
+    username: str = Field(..., min_length=3, max_length=64, description="Crew member username")
+    key: str = Field(..., min_length=4, description="Secret access key")
+    callsign: Optional[str] = Field(default=None, description="Optional telemetry callsign (e.g. ASTRO-02)")
 
 class UserLogin(BaseModel):
-    username_or_email: str = Field(..., description="Username or email")
-    password: str = Field(..., description="Password")
+    username: str = Field(..., description="Astronaut username")
+    key: str = Field(..., description="Secret access key")
 
 class UserResponse(BaseModel):
     id: int
     username: str
-    email: str
-    full_name: str
-    callsign: str
-    role: str
-    emergency_contact_name: str
-    emergency_contact_callsign: str
-    emergency_contact_email: Optional[str] = None
-    emergency_contact_phone: Optional[str] = None
-    emergency_contact_role: Optional[str] = None
+    crew_name: str
+    station_name: str
+    is_lead: bool = False
+    callsign: Optional[str] = None
     alert_timeout_seconds: int = 60
     created_at: datetime
 
@@ -163,20 +159,14 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
     user: UserResponse
 
-class UpdateEmergencyContactRequest(BaseModel):
-    emergency_contact_name: str
-    emergency_contact_callsign: str
-    emergency_contact_email: Optional[str] = None
-    emergency_contact_phone: Optional[str] = None
-    emergency_contact_role: Optional[str] = "Crew Medical Officer"
-    alert_timeout_seconds: Optional[int] = Field(default=60, ge=10, le=3600)
-
 # ---------------------------------------------------------
 # Intra-Crew Emergency Escalation & Alarm Schemas
 # ---------------------------------------------------------
 class EmergencyAlert(BaseModel):
     alert_id: str
     astronaut_id: str
+    crew_name: str = "CREW-A"
+    station_name: str = "LUNAR-BASE-ALPHA"
     severity: str
     hazard_origin: str
     message: str

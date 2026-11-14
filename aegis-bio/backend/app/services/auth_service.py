@@ -88,82 +88,78 @@ def get_optional_current_user(
     return db.query(UserModel).filter(UserModel.username == username).first()
 
 def seed_default_users_if_empty(db: Session):
-    """Ensure baseline astronauts exist with pre-configured emergency contacts."""
+    """Ensure baseline station crews and lead astronauts exist."""
     if db.query(UserModel).count() > 0:
         return
 
     default_users = [
+        # CREW A (Station: LUNAR-BASE-ALPHA)
         {
             "username": "cmdr_vance",
-            "email": "vance@artemis.nasa.gov",
-            "password": "Password123!",
-            "full_name": "Cmdr. Elena Vance",
+            "key": "Key1234!",
             "callsign": "ASTRO-01",
-            "role": "Mission Commander",
-            "emergency_contact_name": "Dr. Marcus Chen",
-            "emergency_contact_callsign": "ASTRO-02",
-            "emergency_contact_email": "chen@artemis.nasa.gov",
-            "emergency_contact_phone": "MCC-CH-02",
-            "emergency_contact_role": "Crew Medical Officer",
+            "crew_name": "CREW-A",
+            "station_name": "LUNAR-BASE-ALPHA",
+            "is_lead": True,
             "alert_timeout_seconds": 60,
         },
         {
             "username": "dr_chen",
-            "email": "chen@artemis.nasa.gov",
-            "password": "Password123!",
-            "full_name": "Dr. Marcus Chen",
+            "key": "Key1234!",
             "callsign": "ASTRO-02",
-            "role": "Crew Medical Officer",
-            "emergency_contact_name": "Cmdr. Elena Vance",
-            "emergency_contact_callsign": "ASTRO-01",
-            "emergency_contact_email": "vance@artemis.nasa.gov",
-            "emergency_contact_phone": "MCC-CH-01",
-            "emergency_contact_role": "Mission Commander",
+            "crew_name": "CREW-A",
+            "station_name": "LUNAR-BASE-ALPHA",
+            "is_lead": False,
             "alert_timeout_seconds": 60,
         },
         {
             "username": "eng_kowalski",
-            "email": "kowalski@artemis.nasa.gov",
-            "password": "Password123!",
-            "full_name": "Eng. Jan Kowalski",
+            "key": "Key1234!",
             "callsign": "ASTRO-03",
-            "role": "ECLSS Engineer",
-            "emergency_contact_name": "Dr. Marcus Chen",
-            "emergency_contact_callsign": "ASTRO-02",
-            "emergency_contact_email": "chen@artemis.nasa.gov",
-            "emergency_contact_phone": "MCC-CH-02",
-            "emergency_contact_role": "Crew Medical Officer",
+            "crew_name": "CREW-A",
+            "station_name": "LUNAR-BASE-ALPHA",
+            "is_lead": False,
             "alert_timeout_seconds": 60,
         },
         {
             "username": "helena_astro",
-            "email": "helena@artemis.nasa.gov",
-            "password": "Password123!",
-            "full_name": "Helena Rostova",
+            "key": "Key1234!",
             "callsign": "ASTRO-7702-HELENA",
-            "role": "Payload Specialist",
-            "emergency_contact_name": "Dr. Marcus Chen",
-            "emergency_contact_callsign": "ASTRO-02",
-            "emergency_contact_email": "chen@artemis.nasa.gov",
-            "emergency_contact_phone": "MCC-CH-02",
-            "emergency_contact_role": "Crew Medical Officer",
+            "crew_name": "CREW-A",
+            "station_name": "LUNAR-BASE-ALPHA",
+            "is_lead": False,
             "alert_timeout_seconds": 60,
-        }
+        },
+        # CREW B (Separate Crew on Station to test crew-isolation routing)
+        {
+            "username": "lead_okafor",
+            "key": "Key1234!",
+            "callsign": "ASTRO-05",
+            "crew_name": "CREW-B",
+            "station_name": "LUNAR-BASE-ALPHA",
+            "is_lead": True,
+            "alert_timeout_seconds": 60,
+        },
+        {
+            "username": "astro_lindqvist",
+            "key": "Key1234!",
+            "callsign": "ASTRO-06",
+            "crew_name": "CREW-B",
+            "station_name": "LUNAR-BASE-ALPHA",
+            "is_lead": False,
+            "alert_timeout_seconds": 60,
+        },
     ]
 
     for u in default_users:
         user_record = UserModel(
             username=u["username"],
-            email=u["email"],
-            hashed_password=hash_password(u["password"]),
-            full_name=u["full_name"],
+            email=f"{u['username']}@{u['crew_name'].lower()}.station.local",
+            hashed_password=hash_password(u["key"]),
             callsign=u["callsign"],
-            role=u["role"],
-            emergency_contact_name=u["emergency_contact_name"],
-            emergency_contact_callsign=u["emergency_contact_callsign"],
-            emergency_contact_email=u["emergency_contact_email"],
-            emergency_contact_phone=u["emergency_contact_phone"],
-            emergency_contact_role=u["emergency_contact_role"],
+            crew_name=u["crew_name"],
+            station_name=u["station_name"],
+            is_lead=u["is_lead"],
             alert_timeout_seconds=u["alert_timeout_seconds"],
             is_active=True
         )

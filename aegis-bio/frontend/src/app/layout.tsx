@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Aegis-Bio | Autonomous Clinical Flight Surgeon System",
+  title: "Aegis-Bio — Autonomous Crew Health & Flight Surgeon",
   description:
-    "Autonomous onboard clinical decision-support and telemetry forecasting for deep-space missions. Team Sigmoid - NASA Space Apps Challenge.",
+    "Autonomous astronaut health monitoring and clinical decision-support system for deep-space missions.",
 };
 
 export default function RootLayout({
@@ -13,10 +13,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className="dark">
-      <body className="min-h-screen bg-space-950 text-slate-100 aerospace-grid antialiased">
-        {children}
-      </body>
+    <html lang="en">
+      <body>{children}</body>
     </html>
   );
 }

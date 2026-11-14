@@ -7,9 +7,7 @@ Computes 7-day forward predictive trajectory and multidimensional risk indices.
 from typing import Dict, List, Any, Optional
 import numpy as np
 import pandas as pd
-from sklearn.linear_model import Ridge
-from sklearn.preprocessing import PolynomialFeatures
-from sklearn.pipeline import make_pipeline
+from app.services.time_series_forecaster import time_series_forecaster
 
 class HealthPredictorAgent:
     """
@@ -49,44 +47,51 @@ class HealthPredictorAgent:
         future_sols = np.array([last_sol + i for i in range(1, forecast_days + 1)])
 
         # -------------------------------------------------------------
-        # 1. Multi-step Regression for Core Vitals
+        # 1. Adaptive Time-Series Forecasting for Physiological Vitals
+        # Uses Holt's Damped Exponential Smoothing with Autoregressive Momentum
         # -------------------------------------------------------------
-        X = days.reshape(-1, 1)
-        future_X = future_sols.reshape(-1, 1)
+        # Heart Rate Trend
+        hr_input = hr_series if len(hr_series) == len(days) else np.repeat(np.mean(hr_series), len(days))
+        hr_ts = time_series_forecaster.fit_and_forecast(
+            hr_input, horizon=forecast_days, min_bound=45.0, max_bound=170.0, default_baseline=72.0
+        )
+        pred_hr = hr_ts["forecast"]
 
-        # Heart Rate Trend (Polynomial degree 2)
-        poly_hr = make_pipeline(PolynomialFeatures(degree=1 if len(days) < 5 else 2), Ridge(alpha=1.0))
-        poly_hr.fit(X, hr_series if len(hr_series) == len(days) else np.repeat(np.mean(hr_series), len(days)))
-        pred_hr = poly_hr.predict(future_X)
-
-        # SpO2 trend
+        # SpO2 Time-Series Trend
         df_env = pd.DataFrame(env_metrics).dropna(subset=["spo2"])
         if not df_env.empty:
             spo2_by_sol = df_env.groupby("sol")["spo2"].mean().values
-            poly_spo2 = Ridge(alpha=1.0)
-            poly_spo2.fit(X, spo2_by_sol if len(spo2_by_sol) == len(days) else np.repeat(97.8, len(days)))
-            pred_spo2 = np.clip(poly_spo2.predict(future_X), 88.0, 99.5)
+            spo2_input = spo2_by_sol if len(spo2_by_sol) == len(days) else np.repeat(97.8, len(days))
         else:
-            pred_spo2 = np.array([97.8] * forecast_days)
+            spo2_input = np.array([97.8] * len(days))
+
+        spo2_ts = time_series_forecaster.fit_and_forecast(
+            spo2_input, horizon=forecast_days, min_bound=88.0, max_bound=99.5, default_baseline=97.8
+        )
+        pred_spo2 = spo2_ts["forecast"]
 
         # Environmental Forecasting (Cabin CO2 & Radiation)
-        poly_co2 = Ridge(alpha=1.0)
-        poly_co2.fit(X, co2_vals)
-        pred_co2 = np.clip(poly_co2.predict(future_X), 1.5, 8.0)
+        co2_ts = time_series_forecaster.fit_and_forecast(
+            co2_vals, horizon=forecast_days, min_bound=1.5, max_bound=8.0, default_baseline=2.5
+        )
+        pred_co2 = co2_ts["forecast"]
 
-        poly_rad = Ridge(alpha=1.0)
-        poly_rad.fit(X, rad_vals)
-        pred_rad = np.clip(poly_rad.predict(future_X), 10.0, 500.0)
+        rad_ts = time_series_forecaster.fit_and_forecast(
+            rad_vals, horizon=forecast_days, min_bound=10.0, max_bound=500.0, default_baseline=75.0
+        )
+        pred_rad = rad_ts["forecast"]
 
-        # Sleep trend
-        poly_sleep = Ridge(alpha=1.0)
-        poly_sleep.fit(X, sleep_vals)
-        pred_sleep = np.clip(poly_sleep.predict(future_X), 3.0, 9.0)
+        # Sleep Time-Series Trend
+        sleep_ts = time_series_forecaster.fit_and_forecast(
+            sleep_vals, horizon=forecast_days, min_bound=3.0, max_bound=9.0, default_baseline=6.8
+        )
+        pred_sleep = sleep_ts["forecast"]
 
-        # HRV stress trend
-        poly_hrv = Ridge(alpha=1.0)
-        poly_hrv.fit(X, hrv_vals)
-        pred_hrv = np.clip(poly_hrv.predict(future_X), 12.0, 100.0)
+        # HRV Autonomic Stress Time-Series Trend
+        hrv_ts = time_series_forecaster.fit_and_forecast(
+            hrv_vals, horizon=forecast_days, min_bound=12.0, max_bound=100.0, default_baseline=48.0
+        )
+        pred_hrv = hrv_ts["forecast"]
 
         # -------------------------------------------------------------
         # 2. Environmental Stress Coupling

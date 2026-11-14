@@ -1,13 +1,13 @@
 """
 Aegis-Bio Main Application Entry Point
 FastAPI application with CORS, database initialization, and router registrations.
+Starts with a clean, empty database (no auto-seeded dummy data).
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
-from app.database import init_db, SessionLocal
-from app.services.seeder import seed_initial_telemetry
+from app.database import init_db
 
 # Import API Routers
 from app.api.auth import router as auth_router
@@ -17,7 +17,6 @@ from app.api.predict import router as predict_router
 from app.api.emergency import router as emergency_router
 from app.api.chat import router as chat_router
 from app.api.otel_routes import router as otel_router
-from app.services.auth_service import seed_default_users_if_empty
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -27,10 +26,9 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# Explicit CORS configuration for Next.js frontend (http://localhost:3000)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -38,15 +36,9 @@ app.add_middleware(
 
 @app.on_event("startup")
 def on_startup():
-    """Initializes SQLite database tables, default crew authentication profiles, and baseline 30-day Artemis telemetry."""
+    """Initializes database tables without inserting any dummy data."""
     init_db()
-    db = SessionLocal()
-    try:
-        count = seed_initial_telemetry(db)
-        seed_default_users_if_empty(db)
-        print(f"[Aegis-Bio Startup] Database ready. Active telemetry records: {count}")
-    finally:
-        db.close()
+    print("[Aegis-Bio Startup] Clean database initialized (no dummy data).")
 
 # Register API Routers
 app.include_router(auth_router)
@@ -57,7 +49,6 @@ app.include_router(emergency_router)
 app.include_router(chat_router)
 app.include_router(otel_router)
 
-# OpenTelemetry Standard V1 Collector endpoint alias
 @app.post("/v1/metrics", tags=["OpenTelemetry Collector"])
 def otel_v1_metrics(payload: dict):
     from app.services.otel_collector import otel_collector

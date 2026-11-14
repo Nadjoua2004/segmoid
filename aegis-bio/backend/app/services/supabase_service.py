@@ -23,11 +23,12 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def upsert_rows(table: str, rows: Union[Dict[str, Any], List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
+def upsert_rows(table: str, rows: Union[Dict[str, Any], List[Dict[str, Any]]], on_conflict: Optional[str] = None) -> List[Dict[str, Any]]:
     """Upsert one or more rows into a Supabase table via PostgREST."""
     try:
+        conflict_col = on_conflict or ("alert_id" if table == "triage_alerts" else ("session_id" if table == "chat_sessions" else ("message_id" if table == "chat_messages" else "id")))
         resp = session.post(
-            f"{REST_V1_URL}/{table}",
+            f"{REST_V1_URL}/{table}?on_conflict={conflict_col}",
             headers=get_supabase_headers("return=representation,resolution=merge-duplicates"),
             json=rows,
             timeout=5,

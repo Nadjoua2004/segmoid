@@ -161,6 +161,8 @@ export interface HealthMetrics {
 export interface EmergencyAlert {
   alert_id: string;
   astronaut_id: string;
+  crew_name?: string;
+  station_name?: string;
   severity: "WARNING" | "HIGH_ALERT" | "CRITICAL_ESCALATION" | string;
   hazard_origin: string;
   message: string;
@@ -189,15 +191,10 @@ export interface EmergencyAlert {
 export interface UserProfile {
   id: number;
   username: string;
-  email: string;
-  full_name: string;
-  callsign: string;
-  role: string;
-  emergency_contact_name: string;
-  emergency_contact_callsign: string;
-  emergency_contact_email?: string | null;
-  emergency_contact_phone?: string | null;
-  emergency_contact_role?: string | null;
+  crew_name: string;
+  station_name: string;
+  is_lead: boolean;
+  callsign?: string;
   alert_timeout_seconds: number;
   created_at: string;
 }
@@ -223,4 +220,43 @@ export interface ProactiveChatPayload {
   suggested_actions: string[];
   reference_guidelines: string[];
   generated_at: string;
+}
+
+export interface HealthMetricsResponse extends HealthMetrics {
+  id?: string | number;
+  created_at?: string;
+}
+
+export interface TrajectoryPoint {
+  day: number;
+  heart_rate_predicted: number;
+  spo2_predicted: number;
+  sleep_predicted: number;
+  radiation_cumulative_predicted: number;
+  [key: string]: any;
+}
+
+export interface TriageResult {
+  astronaut_id: string;
+  mission_day: number;
+  overall_status: "NOMINAL" | "WARNING" | "CRITICAL" | string;
+  overall_risk_score: number;
+  hazards: {
+    radiation_score: number;
+    microgravity_score: number;
+    isolation_score: number;
+    hostile_env_score: number;
+    distance_score: number;
+    [key: string]: number;
+  };
+  metric_evaluations?: Record<string, any>;
+  [key: string]: any;
+}
+
+export interface PredictionResult {
+  astronaut_id: string;
+  horizon_days?: number;
+  trajectory?: TrajectoryPoint[];
+  projected_trajectory?: PredictorTrajectoryPoint[];
+  [key: string]: any;
 }

@@ -49,6 +49,8 @@ class EmergencyAlertModel(Base):
 
     # Alarm escalation & emergency contact routing
     user_id = Column(Integer, nullable=True)
+    crew_name = Column(String(64), default="CREW-A", nullable=False)
+    station_name = Column(String(120), default="LUNAR-BASE-ALPHA", nullable=False)
     status = Column(String(32), default="PENDING_OWNER", nullable=False)  # PENDING_OWNER, ACKNOWLEDGED_BY_OWNER, SWITCHED_TO_EMERGENCY_CONTACT, ACKNOWLEDGED_BY_CONTACT, RESOLVED
     timeout_seconds = Column(Integer, default=60, nullable=False)
     timeout_at = Column(DateTime, nullable=True)
@@ -65,25 +67,22 @@ class EmergencyAlertModel(Base):
 
 class UserModel(Base):
     """
-    User/Astronaut Profile with Required Emergency Contact Configuration for Authentication.
+    Crew Member & Lead Profile for Offline-First Station Authentication.
+    Uses username and key (password secret).
     """
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     username = Column(String(64), unique=True, index=True, nullable=False)
-    email = Column(String(120), unique=True, index=True, nullable=False)
-    hashed_password = Column(String(255), nullable=False)
-    full_name = Column(String(120), nullable=False)
-    callsign = Column(String(64), index=True, nullable=False)
-    role = Column(String(64), default="Astronaut")
+    email = Column(String(120), nullable=True)
+    hashed_password = Column(String(255), nullable=False)  # stores hashed key
+    callsign = Column(String(64), index=True, nullable=True)
+    is_lead = Column(Boolean, default=False)
+    crew_name = Column(String(64), index=True, nullable=False, default="CREW-A")
+    station_name = Column(String(120), index=True, nullable=False, default="LUNAR-BASE-ALPHA")
     is_active = Column(Boolean, default=True)
 
-    # Chosen Emergency Contact in Authentication
-    emergency_contact_name = Column(String(120), nullable=False)
-    emergency_contact_callsign = Column(String(64), nullable=False)
-    emergency_contact_email = Column(String(120), nullable=True)
-    emergency_contact_phone = Column(String(64), nullable=True)
-    emergency_contact_role = Column(String(64), default="Crew Medical Officer")
+    # Configurable dead-man's switch timeout
     alert_timeout_seconds = Column(Integer, default=60, nullable=False)
 
     created_at = Column(DateTime, default=datetime.utcnow)
