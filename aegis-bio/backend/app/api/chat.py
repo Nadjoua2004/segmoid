@@ -65,6 +65,29 @@ def query_flight_surgeon(payload: ChatQuery, db: Session = Depends(get_db)):
         citations=result["citations"]
     )
 
+@router.get("/history")
+def get_chat_history_records(
+    astronaut_id: Optional[str] = None,
+    limit: int = 50,
+    db: Session = Depends(get_db)
+):
+    """Returns real recorded chat messages from the database."""
+    query = db.query(ChatHistoryModel)
+    if astronaut_id:
+        query = query.filter(ChatHistoryModel.astronaut_id == astronaut_id)
+    rows = query.order_by(ChatHistoryModel.timestamp.asc()).limit(limit).all()
+    return [
+        {
+            "id": r.id,
+            "astronaut_id": r.astronaut_id,
+            "role": r.role,
+            "content": r.content,
+            "citations": r.citations.split("; ") if r.citations else [],
+            "timestamp": r.timestamp,
+        }
+        for r in rows
+    ]
+
 @router.post("/proactive", response_model=ProactiveChatPayload)
 def get_proactive_clinical_dialogue(
     astronaut_id: Optional[str] = "ASTRO-7702-HELENA",

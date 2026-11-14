@@ -282,22 +282,19 @@ def classify_triage_metrics(metrics: HealthMetrics):
     """Executes Dual-Classifier Triage: returns both metric severity and spaceflight hazard triage."""
     return evaluate_multi_hazard_triage(metrics)
 
-@router.get("/current", response_model=TriageResult)
+@router.get("/current", response_model=Optional[TriageResult])
 def get_current_triage_status(
-    astronaut_id: Optional[str] = "ASTRO-7702-HELENA",
+    astronaut_id: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
-    """Evaluates triage status using latest telemetry in the database."""
-    count = db.query(TelemetryLog).count()
-    if count == 0:
-        seed_initial_telemetry(db)
-        
-    latest = db.query(TelemetryLog).filter(
-        TelemetryLog.astronaut_id == astronaut_id
-    ).order_by(TelemetryLog.mission_day.desc(), TelemetryLog.id.desc()).first()
-    
+    """Evaluates triage status using latest telemetry in the database (returns null when empty)."""
+    query = db.query(TelemetryLog)
+    if astronaut_id:
+        query = query.filter(TelemetryLog.astronaut_id == astronaut_id)
+
+    latest = query.order_by(TelemetryLog.mission_day.desc(), TelemetryLog.id.desc()).first()
     if not latest:
-        raise HTTPException(status_code=404, detail="No telemetry available for triage.")
+        return None
         
     metrics = HealthMetrics(
         astronaut_id=latest.astronaut_id,

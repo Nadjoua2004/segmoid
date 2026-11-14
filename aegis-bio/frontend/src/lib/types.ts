@@ -1,10 +1,145 @@
 /**
- * TypeScript type definitions mirroring backend Pydantic schemas for Aegis-Bio
- * Includes Dual-Classifier types:
- * 1. Metric-level severity classifier (NORMAL, MEDIUM, CRITICAL)
- * 2. Multi-hazard spaceflight triage classifier
+ * TypeScript type definitions for Aegis-Bio
+ * Includes OpenTelemetry weekly telemetry, predictor agent, and clinical triage.
  */
 
+export interface CrewMember {
+  id: string;
+  name: string;
+  sex: string;
+  age: number;
+  hrv_baseline: number;
+  hr_max_pred: number;
+  total_weeks: number;
+}
+
+export interface HourlyVital {
+  timestamp: string;
+  sol: number;
+  hour: number;
+  label: string;
+  heart_rate: number | null;
+  systolic_bp: number | null;
+  diastolic_bp: number | null;
+  respiratory_rate: number | null;
+  activity: string;
+}
+
+export interface ShipEnvironmentPoint {
+  timestamp: string;
+  sol: number;
+  hour: number;
+  label: string;
+  cabin_co2: number;
+  radiation_rate_usv: number;
+  spo2: number | null;
+  core_temp: number | null;
+}
+
+export interface StatusDistribution {
+  name: string;
+  value: number;
+  color: string;
+}
+
+export interface StressRecoveryDaily {
+  sol: number;
+  sol_label: string;
+  stress_hrv_rmssd: number;
+  sleep_hours: number;
+  avg_cabin_co2: number;
+  peak_radiation_usv: number;
+  critical_events: number;
+  medium_events: number;
+}
+
+export interface WeeklySummaryKPIs {
+  avg_heart_rate: number;
+  min_heart_rate: number;
+  max_heart_rate: number;
+  avg_spo2: number;
+  min_spo2: number;
+  avg_hrv_rmssd: number;
+  avg_sleep_hours: number;
+  peak_cabin_co2: number;
+  peak_radiation_rate: number;
+  cumulative_radiation_msv: number;
+  avg_core_temp: number;
+  total_critical_hours: number;
+  total_medium_hours: number;
+  dominant_driver: string;
+}
+
+export interface WeeklyTelemetryResponse {
+  astronaut: {
+    id: string;
+    name: string;
+    sex: string;
+    age: number;
+    week_number: number;
+    max_available_weeks: number;
+    start_sol: number;
+    end_sol: number;
+  };
+  summary_kpis: WeeklySummaryKPIs;
+  hourly_vitals: HourlyVital[];
+  ship_environment: ShipEnvironmentPoint[];
+  status_distribution: StatusDistribution[];
+  stress_recovery_daily: StressRecoveryDaily[];
+  otel_telemetry?: {
+    resourceMetrics: any[];
+    collector_status: {
+      active: boolean;
+      protocol: string;
+      total_spans_processed: number;
+      last_sync: string;
+      connected_subsystems: string[];
+    };
+  };
+}
+
+export interface PredictorTrajectoryPoint {
+  day_offset: number;
+  sol: number;
+  sol_label: string;
+  predicted_heart_rate: number;
+  predicted_spo2: number;
+  predicted_cabin_co2: number;
+  predicted_radiation_rate: number;
+  cardiovascular_strain: number;
+  cognitive_fatigue: number;
+  status: "NORMAL" | "MEDIUM" | "CRITICAL";
+}
+
+export interface ClinicalDirective {
+  category: string;
+  urgency: string;
+  action: string;
+  reference: string;
+}
+
+export interface PredictorResponse {
+  astronaut_id: string;
+  astronaut_name: string;
+  evaluated_week: number;
+  forecast_horizon_days: number;
+  health_outlook: "OPTIMAL_STABILITY" | "ELEVATED_STRAIN" | "CRITICAL_DRIFT";
+  cardiovascular_strain_score: number;
+  cognitive_fatigue_risk: number;
+  hypoxia_eclss_risk: number;
+  radiation_hazard_index: number;
+  projected_trajectory: PredictorTrajectoryPoint[];
+  clinical_directives: ClinicalDirective[];
+  environmental_drivers: {
+    cabin_co2_impact: string;
+    radiation_state: string;
+    stress_recovery_ratio: string;
+  };
+}
+
+// -------------------------------------------------------------
+// Legacy & Ingestion Schemas
+// -------------------------------------------------------------
 export interface HealthMetrics {
   astronaut_id: string;
   mission_day: number;
@@ -23,94 +158,12 @@ export interface HealthMetrics {
   subjective_notes?: string;
 }
 
-export interface HealthMetricsResponse extends HealthMetrics {
-  id: number;
-  created_at: string;
-}
-
-// -------------------------------------------------------------
-// CLASSIFIER 1: Metric-Level Severity (NORMAL, MEDIUM, CRITICAL)
-// -------------------------------------------------------------
-export interface MetricEvaluation {
-  metric_name: string;
-  label: string;
-  value: number;
-  unit: string;
-  status: "NORMAL" | "MEDIUM" | "CRITICAL";
-  nominal_range: string;
-  deviation: string;
-  clinical_note: string;
-}
-
-export interface MetricClassificationReport {
-  astronaut_id: string;
-  mission_day: number;
-  highest_severity: "NORMAL" | "MEDIUM" | "CRITICAL";
-  metrics: Record<string, MetricEvaluation>;
-  critical_count: number;
-  medium_count: number;
-  normal_count: number;
-}
-
-// -------------------------------------------------------------
-// CLASSIFIER 2: Multi-Hazard Spaceflight Triage
-// -------------------------------------------------------------
-export interface HazardBreakdown {
-  radiation_score: number;
-  microgravity_score: number;
-  isolation_score: number;
-  distance_score: number;
-  hostile_env_score: number;
-}
-
-export interface Countermeasure {
-  id: string;
-  title: string;
-  category: string;
-  urgency: "IMMEDIATE" | "WITHIN_4H" | "ROUTINE";
-  protocol: string;
-  nasa_hrp_reference: string;
-}
-
-export interface TriageResult {
-  astronaut_id: string;
-  mission_day: number;
-  overall_status: "NOMINAL" | "ELEVATED" | "HIGH" | "CRITICAL";
-  overall_risk_score: number;
-  hazards: HazardBreakdown;
-  clinical_flags: string[];
-  countermeasures: Countermeasure[];
-  requires_emergency_escalation: boolean;
-  ai_rationale: string;
-  metric_evaluations?: Record<string, MetricEvaluation>;
-  evaluated_at: string;
-}
-
-export interface TrajectoryPoint {
-  day: number;
-  heart_rate_predicted: number;
-  spo2_predicted: number;
-  radiation_cumulative_predicted: number;
-  sleep_predicted: number;
-  cardiovascular_strain_index: number;
-  cognitive_readiness_index: number;
-}
-
-export interface PredictionResult {
-  astronaut_id: string;
-  forecast_horizon_days: number;
-  projected_trajectory: TrajectoryPoint[];
-  cardiovascular_strain_score: number;
-  cognitive_degradation_risk: number;
-  early_warnings: string[];
-  critical_inflection_day: number | null;
-  r2_fit_quality: number;
-}
-
 export interface EmergencyAlert {
   alert_id: string;
   astronaut_id: string;
-  severity: "WARNING" | "HIGH_ALERT" | "CRITICAL_ESCALATION";
+  crew_name?: string;
+  station_name?: string;
+  severity: "WARNING" | "HIGH_ALERT" | "CRITICAL_ESCALATION" | string;
   hazard_origin: string;
   message: string;
   suggested_crew_actions: string[];
@@ -118,6 +171,32 @@ export interface EmergencyAlert {
   acknowledged: boolean;
   acknowledged_by?: string | null;
   acknowledged_at?: string | null;
+  override_notes?: string | null;
+  status?: "PENDING_OWNER" | "ACKNOWLEDGED_BY_OWNER" | "SWITCHED_TO_EMERGENCY_CONTACT" | "ACKNOWLEDGED_BY_CONTACT" | "RESOLVED" | string;
+  timeout_seconds?: number;
+  timeout_at?: string | null;
+  remaining_seconds?: number | null;
+  emergency_contact_name?: string | null;
+  emergency_contact_callsign?: string | null;
+  emergency_contact_email?: string | null;
+  emergency_contact_phone?: string | null;
+  emergency_contact_role?: string | null;
+  emergency_contact_notified_at?: string | null;
+  source?: string;
+  requires_action?: boolean;
+  owner_answered?: boolean;
+  prediction_data?: any;
+}
+
+export interface UserProfile {
+  id: number;
+  username: string;
+  crew_name: string;
+  station_name: string;
+  is_lead: boolean;
+  callsign?: string;
+  alert_timeout_seconds: number;
+  created_at: string;
 }
 
 export interface EmergencyAckRequest {
@@ -141,4 +220,43 @@ export interface ProactiveChatPayload {
   suggested_actions: string[];
   reference_guidelines: string[];
   generated_at: string;
+}
+
+export interface HealthMetricsResponse extends HealthMetrics {
+  id?: string | number;
+  created_at?: string;
+}
+
+export interface TrajectoryPoint {
+  day: number;
+  heart_rate_predicted: number;
+  spo2_predicted: number;
+  sleep_predicted: number;
+  radiation_cumulative_predicted: number;
+  [key: string]: any;
+}
+
+export interface TriageResult {
+  astronaut_id: string;
+  mission_day: number;
+  overall_status: "NOMINAL" | "WARNING" | "CRITICAL" | string;
+  overall_risk_score: number;
+  hazards: {
+    radiation_score: number;
+    microgravity_score: number;
+    isolation_score: number;
+    hostile_env_score: number;
+    distance_score: number;
+    [key: string]: number;
+  };
+  metric_evaluations?: Record<string, any>;
+  [key: string]: any;
+}
+
+export interface PredictionResult {
+  astronaut_id: string;
+  horizon_days?: number;
+  trajectory?: TrajectoryPoint[];
+  projected_trajectory?: PredictorTrajectoryPoint[];
+  [key: string]: any;
 }

@@ -19,6 +19,12 @@ class Settings(BaseSettings):
     
     # Database
     DATABASE_URL: str = f"sqlite:///{BASE_DIR / 'aegis_bio.sqlite3'}"
+
+    # Authentication & Security
+    SECRET_KEY: str = "aegis-bio-deep-space-secret-key-super-secure-token-2028"
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7  # 7-day space mission token
+    DEFAULT_ALERT_TIMEOUT_SECONDS: int = 60  # Default seconds before escalating to emergency contact
     
     # ChromaDB Vector Store for RAG
     CHROMA_PERSIST_DIR: str = str(BASE_DIR / "chroma_data")

@@ -28,6 +28,57 @@ def get_db():
         db.close()
 
 def init_db():
-    """Create all database tables."""
+    """Create all database tables and migrate missing columns if needed."""
     import app.models  # Ensure models are loaded
     Base.metadata.create_all(bind=engine)
+
+    # Lightweight migration for existing SQLite database instances
+    if "sqlite" in settings.DATABASE_URL:
+        with engine.connect() as conn:
+            from sqlalchemy import text
+            existing_cols = [
+                row[1] for row in conn.execute(text("PRAGMA table_info(emergency_alerts);")).fetchall()
+            ]
+            columns_to_add = [
+                ("user_id", "INTEGER"),
+                ("crew_name", "VARCHAR(64) DEFAULT 'CREW-A'"),
+                ("station_name", "VARCHAR(120) DEFAULT 'LUNAR-BASE-ALPHA'"),
+                ("status", "VARCHAR(32) DEFAULT 'PENDING_OWNER'"),
+                ("timeout_seconds", "INTEGER DEFAULT 60"),
+                ("timeout_at", "DATETIME"),
+                ("emergency_contact_name", "VARCHAR(120)"),
+                ("emergency_contact_callsign", "VARCHAR(64)"),
+                ("emergency_contact_email", "VARCHAR(120)"),
+                ("emergency_contact_phone", "VARCHAR(64)"),
+                ("emergency_contact_role", "VARCHAR(64)"),
+                ("emergency_contact_notified_at", "DATETIME"),
+                ("source", "VARCHAR(64) DEFAULT 'SYSTEM'"),
+                ("requires_action", "BOOLEAN DEFAULT 1"),
+                ("prediction_data", "TEXT"),
+                ("owner_answered", "BOOLEAN DEFAULT 0"),
+            ]
+            for col_name, col_type in columns_to_add:
+                if col_name not in existing_cols:
+                    try:
+                        conn.execute(text(f"ALTER TABLE emergency_alerts ADD COLUMN {col_name} {col_type};"))
+                        conn.commit()
+                    except Exception:
+                        pass
+
+            # Migration for users table
+            user_cols = [
+                row[1] for row in conn.execute(text("PRAGMA table_info(users);")).fetchall()
+            ]
+            user_columns_to_add = [
+                ("is_lead", "BOOLEAN DEFAULT 0"),
+                ("crew_name", "VARCHAR(64) DEFAULT 'CREW-A'"),
+                ("station_name", "VARCHAR(120) DEFAULT 'LUNAR-BASE-ALPHA'"),
+                ("alert_timeout_seconds", "INTEGER DEFAULT 60"),
+            ]
+            for col_name, col_type in user_columns_to_add:
+                if col_name not in user_cols:
+                    try:
+                        conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {col_type};"))
+                        conn.commit()
+                    except Exception:
+                        pass
