@@ -1,0 +1,54 @@
+{
+  "_comment": "Red-flag fast path (SPEC §7.2). Checked before any LLM call. Phrases are matched case-insensitively on word boundaries; a match is ignored when a negation word appears just before it (e.g. 'no chest pain').",
+  "negations": ["no", "not", "without", "never", "don't have", "dont have", "do not have", "no more", "denies"],
+  "flags": [
+    {
+      "id": "chest_pain",
+      "label": "Chest pain",
+      "phrases": ["chest pain", "chest pains", "pain in my chest", "chest tightness", "tight chest", "chest pressure", "crushing chest"],
+      "guidance": "Chest pain is a red-flag symptom. Stop all activity now, sit or anchor yourself at rest, and call a crewmate to you. The crew medical officer should start the onboard chest-pain checklist and measure heart rate, blood pressure and SpO2.",
+      "cards": ["redflag-critical-protocol", "cardio-crit-protocol"],
+      "metric_hint": "hr"
+    },
+    {
+      "id": "breathing",
+      "label": "Difficulty breathing",
+      "phrases": ["can't breathe", "cant breathe", "cannot breathe", "can not breathe", "short of breath", "shortness of breath", "struggling to breathe", "hard to breathe", "choking"],
+      "guidance": "Difficulty breathing is a red-flag symptom. Stop all activity, check your SpO2 now, and check the cabin CO2/O2 readings. Call a crewmate to you; the crew medical officer follows the onboard oxygen protocol.",
+      "cards": ["redflag-critical-protocol", "spo2-crit-protocol"],
+      "metric_hint": "spo2"
+    },
+    {
+      "id": "loss_of_consciousness",
+      "label": "Fainting / loss of consciousness",
+      "phrases": ["passed out", "fainted", "blacked out", "lost consciousness", "fainting", "about to faint", "going to faint"],
+      "guidance": "Fainting is a red-flag symptom. Stay at rest in a secured position and do not move between modules alone. A crewmate should stay with you while the crew medical officer checks heart rate, blood pressure and blood glucose.",
+      "cards": ["redflag-critical-protocol", "cardio-crit-protocol"],
+      "metric_hint": "bp_sys"
+    },
+    {
+      "id": "vision",
+      "label": "Sudden vision loss",
+      "phrases": ["can't see", "cant see", "cannot see", "lost my vision", "vision loss", "sudden blurry vision", "went blind", "double vision"],
+      "guidance": "A sudden change in vision is a red-flag symptom. Stop safety-critical tasks now and call a crewmate to you. The crew medical officer should run the onboard vision and neurological checks.",
+      "cards": ["redflag-critical-protocol"],
+      "metric_hint": null
+    },
+    {
+      "id": "severe_headache",
+      "label": "Severe headache",
+      "phrases": ["severe headache", "worst headache", "terrible headache", "splitting headache", "excruciating headache"],
+      "guidance": "A severe headache is a red-flag symptom. Stop activity and rest at once, and call a crewmate to you. The crew medical officer should check blood pressure and run the onboard neurological checks; also check the cabin CO2 reading.",
+      "cards": ["redflag-critical-protocol", "spo2-warn-protocol"],
+      "metric_hint": "bp_sys"
+    },
+    {
+      "id": "confusion",
+      "label": "Confusion",
+      "phrases": ["confused", "confusion", "disoriented", "can't think straight", "cant think straight", "don't know where i am", "slurred speech", "can't speak"],
+      "guidance": "Confusion is a red-flag symptom. Do not continue any task. A crewmate must come to you now; the crew medical officer should check SpO2, blood glucose and temperature and the cabin atmosphere readings.",
+      "cards": ["redflag-critical-protocol", "spo2-crit-protocol"],
+      "metric_hint": "spo2"
+    }
+  ]
+}

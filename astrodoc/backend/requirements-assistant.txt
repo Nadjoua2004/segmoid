@@ -1,0 +1,12 @@
+# AstroDoc AI chatbot layer (Layer 3). The backend team adds its own requirements.
+huggingface_hub>=1.0      # Hugging Face Inference API (open-source LLMs)
+chromadb>=1.0
+pypdf>=5.0
+langchain-text-splitters>=0.3
+scikit-learn>=1.4
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.6
+python-dotenv>=1.0
+httpx>=0.27
+pytest>=8.0

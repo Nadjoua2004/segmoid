@@ -1,0 +1,331 @@
+Title: Effects of space on the body | Canadian Space Agency
+Source: https://www.asc-csa.gc.ca/eng/astronauts/living-in-space/effects-of-space-on-the-body.asp
+
+Top of page 
+
+# Effects of space on the body
+
+Canadian Space Agency (CSA) astronaut Chris Hadfield gives fellow astronauts the thumbs up during the first space walk (EVA-1) of the STS-100 mission. This digital picture was taken through the nadir window of the Destiny/U.S. Laboratory. (Credit: NASA) 
+
+Space missions force astronauts to live and work in environments that the human body is unaccustomed to. With the use of man-made equipment and vehicles the body is able to tolerate the space environment, which includes elements such as microgravity, radiation, extreme temperatures, low pressure, isolation, and confinement.
+
+For short-duration missions of one month or less, the physiological adaptation that takes place, although important, is relatively mild when compared to the changes that take place during long-duration missions, such as those on the International Space Station (ISS). Studies have shown that the longer an astronaut remains in space, the more significant are the changes that occur.
+
+While in space, many of these changes tend not to be problematic. Upon return to Earth, however, the effects of living in space are often felt. In some instances, the effects of these changes are noticed immediately (e.g. reduced blood volume and diminished reflexes), while others may not present themselves for months or years (e.g. radiation-induced health problems).
+
+## Types of effects
+
+What is decompression sickness?
+
+What happens to muscles in space?
+
+What happens to bones in space?
+
+How does radiation affect the human body in space?
+
+## Explore further
+
+Living in space
+
+Astronauts
+
+International Space Station
+
+## Follow us
+
+Facebook: CanadianSpaceAgency
+
+X: @csa_asc
+
+Youtube: canadianspaceagency
+
+Instagram: canadianspaceagency
+
+Linkedin: Canadian Space Agency
+
+RSS
+
+Date modified: 
+2025-07-11
+
+========================================
+Title: What is decompression sickness? | Canadian Space Agency
+Source: https://www.asc-csa.gc.ca/eng/astronauts/space-medicine/decomp.asp
+
+Top of page 
+
+# What is decompression sickness?
+
+Decompression sickness (DCS) results when the body is exposed to rapid and significant decreases in atmospheric pressure. DCS is called "the bends" among scuba divers, who can be affected by the sickness if they resurface, or decompress, too quickly. Humans are affected by the illness when nitrogen, normally dissolved in the blood and body tissues, comes out of solution and forms bubbles as a result of the rapid decrease in pressure. This phenomenon can be compared to opening a can of pop; the dissolved carbon dioxide instantly forms bubbles in reaction to the sudden decrease in pressure caused by opening the can. Tiny nitrogen bubbles in the bloodstream and tissues can lead to a variety of symptoms ranging from numbness and tingling to joint pain or even death.
+
+The presence of nitrogen bubbles in the blood can be monitored using Doppler ultrasound on the heart.
+
+Bone x-rays that show the effects of rapid decompression on the body. Left=normal bone, right=bone with bubble.
+
+Click to hear:
+
+Normal heartbeat
+
+Heartbeat with some bubbles present in the blood
+
+Heartbeat with many bubbles present in the blood
+
+## Implications for astronauts
+
+Canadian Space Agency (CSA) astronaut Chris Hadfield's feet are attached to Canadarm while he works to install Canadarm2 on the International Space Station (ISS) during mission STS-100. (Credit: NASA)
+
+Construction of the ISS requires over 160 assembly and maintenance extravehicular activities (EVAs), also known as spacewalks. The space shuttle and the ISS are both pressurized to 14.7 psi, which is equivalent to the atmospheric pressure at sea level. When doing a spacewalk, astronauts wear either the American EVA Mobility Unit (EMU), which is pressurized to 4.3 psi (the same atmospheric pressure as at the summit of Mount Everest), or the Russian Orlan suit (about 5.6 psi). Rapid decompression from normal cabin pressure to a lower atmospheric pressure will result in DCS if appropriate countermeasures are not taken.
+
+Breathing 100% pure oxygen before a sudden exposure to low atmospheric pressure decreases the risk of developing DCS by eliminating nitrogen from the tissues. A 12-hour decompression protocol using 100% oxygen prebreathe has successfully protected astronauts from DCS during EVAs from the space shuttle. Astronauts breathe 100% oxygen for one to two hours at normal cabin pressure, and then reduce the cabin pressure to 10.2 psi for 12 hours. Finally, after donning the EMU, astronauts breathe 100% oxygen for another hour before performing the EVA. For EVAs performed from the ISS rather than the space shuttle, the existing 12-hour protocol is being replaced with a more efficient yet equally effective method to prevent DCS.
+
+## Related links
+
+Using exercise to help prevent decompression sickness
+
+## Explore further
+
+Space medicine
+
+Effects of space on the body 
+
+Exercising in space
+
+## Follow us
+
+Facebook: CanadianSpaceAgency
+
+X: @csa_asc
+
+Youtube: canadianspaceagency
+
+Instagram: canadianspaceagency
+
+Linkedin: Canadian Space Agency
+
+RSS
+
+Date modified: 
+2006-08-18
+
+========================================
+Title: What happens to muscles in space? | Canadian Space Agency
+Source: https://www.asc-csa.gc.ca/eng/astronauts/space-medicine/muscles.asp
+
+Top of page 
+
+# What happens to muscles in space?
+
+While living and working in space is mentally strenuous, the absence of gravity makes working in a spacecraft physically undemanding. On Earth, we must constantly use certain muscles to support ourselves against the force of gravity. These muscles, commonly called antigravity muscles, include the gastrocnemius (calf muscles), the quadriceps, and the muscles of the back and neck. Because astronauts work in a weightless (microgravity) environment, very little muscle contraction is needed to support their bodies or move around.
+
+Canadian Space Agency astronaut Chris Hadfield experiences freefall during a parabolic flight on a KC-135 jet to test various science experiments for future missions. (Credit: NASA)
+
+Without regular use and exercise our muscles weaken and deteriorate, a process called atrophy. Studies have shown that astronauts experience up to a 20% loss of muscle mass on spaceflights lasting five to 11 days. The loss of muscle mass corresponds to a loss of strength that can be potentially dangerous if an astronaut must perform a strenuous emergency procedure upon re-entry into the Earth's gravitational field. Even though muscle mass and strength can be regained once astronauts have returned to Earth, maintaining muscle in space is a concern, especially for long-duration space missions.
+
+Cross sections of rat muscle show the effect of space on muscles. Left=Earth, right=space. (Credit: NASA)
+
+The only way to minimize muscle atrophy in space is through intensive exercise, particularly strength training exercises, combined with an adequate diet. However, the two and a half hours per day that astronauts on the International Space Station (ISS) must spend exercising greatly reduces mission efficiency. In order to reduce the amount of time that must be spent exercising on space missions, studies have been done on the use of electrical muscle stimulation to maintain muscle strength and mass.
+
+## Explore further
+
+Space medicine
+
+H-Reflex flexes its muscles!
+
+Exercising in space
+
+## Follow us
+
+Facebook: CanadianSpaceAgency
+
+X: @csa_asc
+
+Youtube: canadianspaceagency
+
+Instagram: canadianspaceagency
+
+Linkedin: Canadian Space Agency
+
+RSS
+
+Date modified: 
+2006-08-18
+
+========================================
+Title: What happens to bones in space? | Canadian Space Agency
+Source: https://www.asc-csa.gc.ca/eng/astronauts/space-medicine/bones.asp
+
+Top of page 
+
+# What happens to bones in space?
+
+Astronaut Leroy Chiao, Expedition 10 commander and NASA International Space Station (ISS) science officer, equipped with a bungee harness, exercises on the Treadmill Vibration Isolation System (TVIS) in the Zvezda Service Module of the ISS. April 10, 2005. (Credit: NASA)
+
+One of the major obstacles to long-term space missions in the threat of severe bone loss in astronauts. In the microgravity environment of space, astronauts lose on average 1% to 2% of their bone mineral density every month. For a short-duration flight, bone loss is a fairly minor consequence.
+
+On a long-duration space flight, such as those planned for missions to Mars and beyond, bone loss can be a serious impediment. This loss may not hinder astronauts while they are in orbit, but upon return to Earth, their weakened bones will be fragile and at an increased risk of fractures. At this time, it is unknown whether this bone loss will eventually reach a plateau, or whether it will continue indefinitely.
+
+Bones are not unchanging calcium structures; they constantly reshape themselves in relation to the stress that is put on them. Just like muscles, if you don't use your bones, they will weaken. Bone loss occurs in the weightless environment of space because bones no longer have to support the body against gravity. On Earth, gravity applies a constant mechanical load to the skeletal system, that causes healthy bones to maintain a certain density so that they are able to support the body.
+
+The best way to build bone mass is by doing weight-bearing exercises such as walking, jogging, volleyball, and basketball. However, it is very difficult to duplicate weight-bearing exercise in a weightless environment. Astronauts must use restraints to strap themselves to a treadmill in order to create the necessary weight-bearing environment. Although this countermeasure slows the rate of bone loss, it does not eliminate the problem altogether.
+
+Astronauts are not the only ones who must worry about bone loss. One and a half million Canadians suffer from osteoporosis, a disease that causes bones to lose density and strength. One in four women and one in eight men over the age of 50 have osteoporosis. Researchers hope that solving the problem of bone loss in space will also help to prevent and cure the disease on Earth.
+
+The changes that take place in bones from osteoporosis are similar to the changes that take place in astronauts' bones when they live in microgravity for long periods of time.
+
+## Related links
+
+"Space Bones" - Science@NASA Article: Weightlessness sure looks like a lot of fun, but prolonged exposure to zero-G in space can have some negative side effects - like the weakening of human bones.
+
+ Osteoporosis Experiments in Orbit - from the Canadian Space Agency's Space Life Sciences 
+
+ Osteoporosis online - from the Osteoporosis Society of Canada 
+
+ Exercising in space 
+
+## Explore further
+
+MARROW: Keeping bones healthy in space
+
+Effects of space on the body 
+
+Exercising in space
+
+## Follow us
+
+Facebook: CanadianSpaceAgency
+
+X: @csa_asc
+
+Youtube: canadianspaceagency
+
+Instagram: canadianspaceagency
+
+Linkedin: Canadian Space Agency
+
+RSS
+
+Date modified: 
+2006-08-18
+
+========================================
+Title: How does radiation affect the human body in space? | Canadian Space Agency
+Source: https://www.asc-csa.gc.ca/eng/astronauts/space-medicine/radiation.asp
+
+Top of page 
+
+# How does radiation affect the human body in space?
+
+## What is radiation?
+
+Radiation is the spread of energy through space or matter in the form of waves or particles.
+
+## What kind of radiation are humans exposed to on Earth?
+
+There are two types of radiation:
+
+Natural background radiation from cosmic sources (e.g., galactic cosmic rays, solar radiation) and from terrestrial sources (e.g., radiation emitted by rocks, radon)
+
+Manmade radiation (e.g., diagnostic X-ray imaging, nuclear reactors)
+
+## What kind of radiation are humans exposed to in space?
+
+Soft x-ray image of a solar flare on the Sun. Solar flares give off harmful solar particles that make up one type of space radiation. (Credit: Yohkoh Soft X-Ray Telescope, courtesy of NASA) 
+
+There are three kinds of space radiation:
+
+Galactic cosmic rays (GCR) originating outside the solar system;
+
+Solar particles emitted by the sun during solar flares (solar particle events);
+
+Radiation trapped by the Earth's magnetic field.
+
+On the surface of the Earth, these types of radiation are not significant health hazards because the Earth's atmosphere and magnetic field protect us from most of the radiation from space. Astronauts in low Earth orbit still receive some protection from the Earth's atmosphere and magnetic field, but radiation becomes a much bigger problem when they travel to places outside these protective barriers, like the moon or mars.
+
+## The effects of radiation on the human body
+
+Space radiation is one of the main health hazards of spaceflight. It is dangerous because it has sufficient energy to change or break DNA molecules, which can damage or kill a cell. This can lead to health problems ranging from acute effects to long term effects.
+
+Acute effects such as changes to the blood, diarrhea, nausea, and vomiting are mild and recoverable. Other effects of acute radiation exposure are much more severe such as central nervous system damage or even death. Acute effects are not expected to result from exposure to space radiation, except if an astronaut is exposed to a large solar particle event, such as a solar flare, which produces a high dose of radiation.
+
+The major concern about space radiation is the long term effects on astronauts. Long term effects can include cataracts, increased chance of cancer, and sterility. Some health effects can skip a generation and appear in the descendants of the exposed individual, being passed on by mutated genes.
+
+The types of health problems that occur are determined by the extent of exposure to radiation, an astronaut's vulnerability to radiation and other variables. Exposure to radiation depends on: 
+
+Altitude of the spacecraft
+
+Amount of shielding from the spacecraft or spacesuit,
+
+Length of mission,
+
+Duration and intensity of exposure,
+
+Type of radiation.
+
+Vulnerability to radiation includes individual sensitivity to radiation and differences in age, sex, or health status. In addition, variables such as weightlessness or body temperature can weaken the human immune system and affect how body tissues and organs respond to radiation.
+
+## Space radiation exposure limits for astronauts
+
+An international panel dealing with medical issues concerning International Space Station (ISS) astronauts, the ISS Multilateral Medical Operations Panel (ISS MMOP) and its Radiation Health Working Group (RHWG), are responsible for setting exposure limits for ISS astronauts. The standards are based on the recommendations of the International Commission on Radiological Protection (ICRP) and the National Council on Radiation Protection and Measurement (NCRP). After exceeding the set career limit, there is a greater probability that astronauts will develop harmful health effects, and so they are no longer allowed to participate in space flight. The career limit for Canadian astronauts is the same as what is recommended for national workers in the radiation field, such as x-ray technicians. The exposure limits for 30 days and 1 year are to prevent acute effects of radiation exposure and career limits are to prevent long term effects.
+
+ Organ specific exposure limits for Canadian Space Agency astronauts (Sv) 
+
+ Exposure interval 
+ Blood forming organs 
+ Eye 
+ Skin 
+
+ 30 days 
+ 0.25 
+ 1.00 
+ 1.50 
+
+ Annual 
+ 0.50 
+ 2.00 
+ 3.00 
+
+ Career 
+ 1.00 
+ 4.00 
+ 6.00 
+
+## Overexposure prevention methods
+
+Flight surgeons and scientists continuously monitor astronauts' exposures to ensure that the astronauts do not exceed the set radiation exposure limits. When in space, astronauts are monitored 24 hours per day by the Space Radiation Analysis Group (SRAG) from NASA's Mission Control Center in Houston, Texas. The SRAG carefully analyzes the exposure data from radiation detectors on the ISS and passes the results on to the medical team responsible for the health and safety of astronauts. This data and "radiation weather" forecasts obtained from the National Oceanic and Atmospheric Administration (NOAA) are used by mission planners to schedule potentially high radiation exposure activities, such as spacewalks, for times when cosmic radiation levels are the lowest. The ultimate goal is to keep radiation exposure below the limits; therefore the ALARA principle is followed to make sure that exposures are always As Low As Reasonably Achievable.
+
+The Canadian Space Agency is supporting the development of the new Canadian radiation detectors called Bubble Detectors and MOSFET Dosimeters to better monitor and assess astronauts' radiation exposures and doses.
+
+## Related links
+
+ Radiation projects
+
+EVARM: Little transistor records radiation levels - includes the use of MOSFET Dosimeters to measure radiation doses astronauts receive during spacewalks
+
+Why is space radiation an important concern for human spaceflight? - detailed explanation of the effects of radiation on the human body
+
+What is space radiation? - more information on different kinds of radiation
+
+## Explore further
+
+Space medicine
+
+Effects of space on the body 
+
+Radi-N2: Tracking space radiation and its risks
+
+## Follow us
+
+Facebook: CanadianSpaceAgency
+
+X: @csa_asc
+
+Youtube: canadianspaceagency
+
+Instagram: canadianspaceagency
+
+Linkedin: Canadian Space Agency
+
+RSS
+
+Date modified: 
+2006-08-18

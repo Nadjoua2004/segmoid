@@ -1,0 +1,211 @@
+{
+  "_comment": "AstroDoc AI countermeasure cards (SPEC §7.4). topic = what the card treats; hazard = NASA HRP hazard. demoProtocol=true means the steps are team-authored placeholders that the cited document supports only in general terms, so the UI must show a 'demo protocol' tag.",
+  "sources": {
+    "human_body": {"title": "NASA - The Human Body in Space", "url": "https://www.nasa.gov/humans-in-space/the-human-body-in-space/"},
+    "hrp_hazards": {"title": "NASA HRP - 5 Hazards of Human Spaceflight", "url": "https://www.nasa.gov/hrp/hazards"},
+    "tb_radiation": {"title": "NASA-STD-3001 Technical Brief - Radiation Protection", "url": "https://www.nasa.gov/wp-content/uploads/2023/12/ochmo-tb-020-radiation-protection.pdf"},
+    "tb_co2": {"title": "NASA-STD-3001 Technical Brief - Carbon Dioxide", "url": "https://www.nasa.gov/wp-content/uploads/2023/12/ochmo-tb-004-carbon-dioxide.pdf"},
+    "exercise": {"title": "NASA - Astronaut Exercise", "url": "https://www.nasa.gov/missions/station/iss-research/astronaut-exercise/"},
+    "exercise_paper": {"title": "Effects of exercise countermeasures on multisystem function in long duration spaceflight astronauts (npj Microgravity 2023)", "url": "https://doi.org/10.1038/s41526-023-00256-5"},
+    "csa_radiation": {"title": "CSA - Effects of space on the body (radiation)", "url": "https://www.asc-csa.gc.ca/eng/astronauts/space-medicine/radiation.asp"},
+    "jaxa_health": {"title": "JAXA - Health management for astronauts", "url": "https://humans-in-space.jaxa.jp/en/biz-lab/med-in-space/healthcare/"},
+    "jaxa_food": {"title": "JAXA - Space food and nutrition", "url": "https://humans-in-space.jaxa.jp/en/biz-lab/med-in-space/healthcare/food/"},
+    "red_risks": {"title": "Red risks for a journey to the red planet (Patel et al., npj Microgravity 2020)", "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC7645687/"}
+  },
+  "cards": [
+    {
+      "id": "rad-warn-protocol", "topic": "radiation", "hazard": "Radiation", "level": "Warning", "group": "protocol",
+      "title": "Reduce radiation exposure time",
+      "steps": [
+        "Limit time spent in low-shielding modules until readings return to your mission average.",
+        "Log your dosimeter reading every 2 hours.",
+        "Report the trend to the crew medical officer at the next daily conference."
+      ],
+      "source": "tb_radiation", "demoProtocol": false
+    },
+    {
+      "id": "rad-warn-shielding", "priority": 1, "topic": "radiation", "hazard": "Radiation", "level": "Warning", "group": "shielding",
+      "title": "Increase shielding around rest areas",
+      "steps": [
+        "Move your sleep station to the most shielded area of the habitat.",
+        "Use water containers and stowage bags as extra shielding walls around the sleep station."
+      ],
+      "source": "tb_radiation", "demoProtocol": false
+    },
+    {
+      "id": "rad-warn-diet", "topic": "radiation", "hazard": "Radiation", "level": "Warning", "group": "diet",
+      "title": "Antioxidant-rich food and hydration",
+      "steps": [
+        "Keep to antioxidant-rich menu items (fruit, vegetables) in the mission nutrition plan.",
+        "Maintain hydration per the mission nutrition plan."
+      ],
+      "source": "red_risks", "demoProtocol": true
+    },
+    {
+      "id": "rad-crit-shelter", "priority": 0, "topic": "radiation", "hazard": "Radiation", "level": "Critical", "group": "shielding",
+      "title": "Solar particle event: go to the storm shelter now",
+      "steps": [
+        "Go to the designated storm shelter immediately.",
+        "Stay in the shelter until mission control or the commander gives the all-clear."
+      ],
+      "source": "tb_radiation", "demoProtocol": false
+    },
+    {
+      "id": "rad-crit-protocol", "topic": "radiation", "hazard": "Radiation", "level": "Critical", "group": "protocol",
+      "title": "Solar particle event: crew headcount and dose tracking",
+      "steps": [
+        "Commander performs a crew headcount in the shelter.",
+        "Every crew member records a dosimeter reading every 30 minutes.",
+        "Postpone all EVAs until the event is over."
+      ],
+      "source": "tb_radiation", "demoProtocol": false
+    },
+    {
+      "id": "fatigue-warn-protocol", "priority": 1, "topic": "fatigue", "hazard": "Isolation", "level": "Warning", "group": "protocol",
+      "title": "Protect the next sleep window",
+      "steps": [
+        "Protect your next scheduled sleep window; no tasks scheduled inside it.",
+        "Follow the lighting schedule: bright light on waking, dim light 1 hour before sleep.",
+        "Ask the commander to reduce your workload today."
+      ],
+      "source": "human_body", "demoProtocol": false
+    },
+    {
+      "id": "fatigue-warn-diet", "topic": "fatigue", "hazard": "Isolation", "level": "Warning", "group": "diet",
+      "title": "Caffeine timing",
+      "steps": ["No caffeine within 6 hours of your sleep window."],
+      "source": "human_body", "demoProtocol": true
+    },
+    {
+      "id": "fatigue-crit-protocol", "topic": "fatigue", "hazard": "Isolation", "level": "Critical", "group": "protocol",
+      "title": "Severe sleep loss: stand down from critical tasks",
+      "steps": [
+        "Do not perform EVA, robotics or other safety-critical tasks until rested.",
+        "Take a protected sleep period as soon as possible.",
+        "Notify the crew medical officer."
+      ],
+      "source": "hrp_hazards", "demoProtocol": true
+    },
+    {
+      "id": "cardio-warn-protocol", "topic": "cardiovascular", "hazard": "Gravity", "level": "Warning", "group": "protocol",
+      "title": "Rest and re-measure heart rate / blood pressure",
+      "steps": [
+        "Stop strenuous activity and rest for 10 minutes.",
+        "Re-measure heart rate and blood pressure sitting, then lying down.",
+        "Drink fluids per the mission hydration plan."
+      ],
+      "source": "human_body", "demoProtocol": false
+    },
+    {
+      "id": "cardio-crit-protocol", "priority": 0, "topic": "cardiovascular", "hazard": "Gravity", "level": "Critical", "group": "protocol",
+      "title": "Possible cardiovascular distress: stop and notify the crew medical officer",
+      "steps": [
+        "Stop all activity now and lie down or anchor yourself in a resting position.",
+        "Notify the crew medical officer immediately.",
+        "Re-measure heart rate, blood pressure and SpO2 every 5 minutes until the CMO arrives."
+      ],
+      "source": "human_body", "demoProtocol": true
+    },
+    {
+      "id": "cardio-warn-exercise", "topic": "cardiovascular", "hazard": "Gravity", "level": "Warning", "group": "protocol",
+      "title": "Keep up the exercise countermeasure program",
+      "steps": [
+        "Continue the prescribed daily aerobic and resistance exercise once readings are back in range.",
+        "Do not skip exercise sessions; they counter cardiovascular and muscle deconditioning."
+      ],
+      "source": "exercise_paper", "demoProtocol": false
+    },
+    {
+      "id": "spo2-warn-protocol", "topic": "spo2", "hazard": "Hostile environment", "level": "Warning", "group": "protocol",
+      "title": "Low SpO2: rest, re-measure, check cabin air",
+      "steps": [
+        "Rest and re-measure SpO2 after 5 minutes, with the sensor positioned correctly.",
+        "Check the cabin CO2 and O2 readings for your module.",
+        "If CO2 is elevated, move to a well-ventilated module and report it."
+      ],
+      "source": "tb_co2", "demoProtocol": false
+    },
+    {
+      "id": "spo2-crit-protocol", "topic": "spo2", "hazard": "Hostile environment", "level": "Critical", "group": "protocol",
+      "title": "Very low SpO2: notify CMO, oxygen protocol",
+      "steps": [
+        "Notify the crew medical officer now.",
+        "Follow the onboard oxygen protocol in the medical checklist.",
+        "Check cabin atmosphere readings and alert the crew if they are abnormal."
+      ],
+      "source": "tb_co2", "demoProtocol": true
+    },
+    {
+      "id": "glucose-warn-diet", "topic": "glucose", "hazard": "Distance", "level": "Warning", "group": "diet",
+      "title": "Correct blood glucose with the nutrition plan",
+      "steps": [
+        "If glucose is low: take a fast-acting carbohydrate from the mission nutrition plan.",
+        "If glucose is high: skip extra snacks and drink water.",
+        "Re-measure blood glucose in 15 minutes."
+      ],
+      "source": "jaxa_food", "demoProtocol": true
+    },
+    {
+      "id": "glucose-crit-protocol", "topic": "glucose", "hazard": "Distance", "level": "Critical", "group": "protocol",
+      "title": "Critical blood glucose: notify CMO",
+      "steps": [
+        "If low and you can swallow safely, take fast-acting carbohydrate now.",
+        "Notify the crew medical officer.",
+        "Re-measure in 15 minutes."
+      ],
+      "source": "jaxa_food", "demoProtocol": true
+    },
+    {
+      "id": "fever-warn-protocol", "topic": "fever", "hazard": "Hostile environment", "level": "Warning", "group": "protocol",
+      "title": "Fever: re-measure, hydrate, isolate shared items",
+      "steps": [
+        "Re-measure body temperature in 30 minutes.",
+        "Drink fluids per the mission hydration plan.",
+        "Avoid sharing items (cups, towels, headsets) with crewmates.",
+        "Notify the crew medical officer."
+      ],
+      "source": "jaxa_health", "demoProtocol": true
+    },
+    {
+      "id": "fever-crit-protocol", "topic": "fever", "hazard": "Hostile environment", "level": "Critical", "group": "protocol",
+      "title": "High fever or hypothermia: CMO now",
+      "steps": [
+        "Notify the crew medical officer now.",
+        "Medication only per the onboard medical checklist or flight surgeon.",
+        "Re-measure temperature every 15 minutes."
+      ],
+      "source": "jaxa_health", "demoProtocol": true
+    },
+    {
+      "id": "mood-warn-protocol", "topic": "mood", "hazard": "Isolation", "level": "Warning", "group": "protocol",
+      "title": "Low mood: connect and recover",
+      "steps": [
+        "Optional: book a private conference with the ground psychologist.",
+        "Make contact with a crewmate today (shared meal, short talk).",
+        "Schedule a recovery activity you enjoy in the next 24 hours."
+      ],
+      "source": "hrp_hazards", "demoProtocol": false
+    },
+    {
+      "id": "mood-crit-protocol", "topic": "mood", "hazard": "Isolation", "level": "Critical", "group": "protocol",
+      "title": "Persistent very low mood: involve the CMO",
+      "steps": [
+        "Talk with the crew medical officer today.",
+        "Book a private conference with the ground psychologist.",
+        "Stay with crewmates; avoid working alone today."
+      ],
+      "source": "jaxa_health", "demoProtocol": true
+    },
+    {
+      "id": "redflag-critical-protocol", "topic": "redflag", "hazard": "General", "level": "Critical", "group": "protocol",
+      "title": "Emergency symptom: first actions",
+      "steps": [
+        "Stop what you are doing and stay still in a safe position.",
+        "Call a crewmate to you now; do not stay alone.",
+        "The crew medical officer follows the onboard emergency medical checklist.",
+        "Medication only per the onboard medical checklist or flight surgeon."
+      ],
+      "source": "jaxa_health", "demoProtocol": true
+    }
+  ]
+}
