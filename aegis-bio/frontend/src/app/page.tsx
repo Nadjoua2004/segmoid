@@ -8,9 +8,13 @@ import {
   TriageResult,
   PredictionResult,
   DailyCheckInPayload,
+  GlucoseContext,
+  SymptomKey,
 } from "@/lib/types";
+import { SYMPTOMS, GLUCOSE_CONTEXT, RATINGS } from "@/lib/healthIndicators";
 import { DailyCheckInModal } from "@/components/DailyCheckInModal";
 import { StationLoginPage } from "@/components/StationLoginPage";
+import { HologramModel3D } from "@/components/HologramModel3D";
 import {
   Button,
   EmptyState,
@@ -80,11 +84,31 @@ function buildSvgPath(
   return pts.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
 }
 
+function renderFormattedChatText(content: string): React.ReactNode {
+  return content.split("\n").map((line, lineIdx, arr) => {
+    const parts = line.split(/(\*\*[^*]+\*\*)/g);
+    return (
+      <React.Fragment key={lineIdx}>
+        {parts.map((part, pIdx) =>
+          part.startsWith("**") && part.endsWith("**") && part.length > 4 ? (
+            <strong key={pIdx} style={{ fontWeight: 700 }}>
+              {part.slice(2, -2)}
+            </strong>
+          ) : (
+            <React.Fragment key={pIdx}>{part}</React.Fragment>
+          )
+        )}
+        {lineIdx < arr.length - 1 && <br />}
+      </React.Fragment>
+    );
+  });
+}
+
 export default function AegisBioApp() {
   const [activeScreen, setActiveScreen] = useState<ScreenId>("overview");
   const [selectedAstroId, setSelectedAstroId] = useState<string>("");
   const [showLeftNav, setShowLeftNav] = useState<boolean>(true);
-  const [showRightPanel, setShowRightPanel] = useState<boolean>(true);
+  const [showRightPanel, setShowRightPanel] = useState<boolean>(false);
   const [chartMetric, setChartMetric] = useState<ChartMetric>("spo2");
 
   // Floating Chatbot Dialog State
@@ -111,6 +135,7 @@ export default function AegisBioApp() {
 
   // Crew Lead Authentication & Provisioning State
   const [crewSubTab, setCrewSubTab] = useState<"roster" | "lead-provision">("roster");
+  const [isAuthChecked, setIsAuthChecked] = useState<boolean>(false);
   const [leadToken, setLeadToken] = useState<string>("");
   const [leadProfile, setLeadProfile] = useState<{
     username: string;
@@ -136,8 +161,6 @@ export default function AegisBioApp() {
   const [leadFeedback, setLeadFeedback] = useState<string>("");
   const [isModalCheckInOpen, setIsModalCheckInOpen] = useState<boolean>(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
-  const [isNotifOpen, setIsNotifOpen] = useState<boolean>(false);
-  const [reminderSnoozedUntil, setReminderSnoozedUntil] = useState<number>(0);
   const [justCheckedInAstroIds, setJustCheckedInAstroIds] = useState<string[]>([]);
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
 
@@ -149,23 +172,68 @@ export default function AegisBioApp() {
     return () => clearInterval(id);
   }, []);
 
-  // Restore Station Session from LocalStorage
+  // Restore Station Session from LocalStorage (keeps user signed in across reloads)
   useEffect(() => {
-    try {
-      const savedToken = localStorage.getItem("aegis_station_token");
-      const savedProfile = localStorage.getItem("aegis_station_profile");
-      if (savedToken && savedProfile) {
-        setLeadToken(savedToken);
-        setLeadProfile(JSON.parse(savedProfile));
+    let cancelled = false;
+    const restoreSession = async () => {
+      try {
+        const savedToken = localStorage.getItem("aegis_station_token");
+        const savedProfileRaw = localStorage.getItem("aegis_station_profile");
+        if (savedToken) {
+          setLeadToken(savedToken);
+          let parsedProfile: any = null;
+          if (savedProfileRaw && savedProfileRaw !== "undefined") {
+            try {
+              parsedProfile = JSON.parse(savedProfileRaw);
+            } catch {
+              parsedProfile = null;
+            }
+          }
+          if (parsedProfile) {
+            setLeadProfile(parsedProfile);
+            const astroId = parsedProfile.callsign || parsedProfile.username;
+            if (astroId) {
+              setSelectedAstroId((prev) => prev || astroId);
+              setCheckInForm((prev) => ({ ...prev, astronaut_id: astroId }));
+            }
+          }
+          // Silently refresh profile from backend; only sign out on explicit 401/403
+          try {
+            const fresh = await api.getMyProfile(savedToken);
+            if (!cancelled && fresh) {
+              setLeadProfile(fresh);
+              localStorage.setItem("aegis_station_profile", JSON.stringify(fresh));
+              const astroId = fresh.callsign || fresh.username;
+              if (astroId) {
+                setSelectedAstroId((prev) => prev || astroId);
+                setCheckInForm((prev) => ({ ...prev, astronaut_id: astroId }));
+              }
+            }
+          } catch (err: any) {
+            if (!cancelled && err?.status === 401) {
+              localStorage.removeItem("aegis_station_token");
+              localStorage.removeItem("aegis_station_profile");
+              setLeadToken("");
+              setLeadProfile(null);
+              setChatHistory([]);
+            }
+          }
+        }
+      } catch {
+        // ignore storage access issues
+      } finally {
+        if (!cancelled) setIsAuthChecked(true);
       }
-    } catch {
-      // ignore
-    }
+    };
+    restoreSession();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // Unified Daily Check-in Form State (Single Screen, No Tabs)
+  // Unified Daily Check-in Form State (All 44 Classifier Metrics)
   const [checkInForm, setCheckInForm] = useState<HealthMetrics>({
-    astronaut_id: "CM-1 Ibarra",
+    astronaut_id: "ASTRO-7702-HELENA",
     mission_day: 1,
     heart_rate: 72,
     bp_sys: 118,
@@ -179,6 +247,47 @@ export default function AegisBioApp() {
     hrv_rmssd: 48,
     cabin_co2_mmhg: 2.6,
     subjective_notes: "",
+  });
+  const [checkInExtras, setCheckInExtras] = useState<{
+    glucose_context: GlucoseContext;
+    bedtime: string;
+    wake_time: string;
+    sleep_quality: number;
+    sleep_medication: boolean;
+    energy_level: number;
+    stress_level: number;
+    cardio_minutes: number;
+    resistance_minutes: number;
+    calories_kcal: number;
+    water_liters: number;
+    breakfast: boolean;
+    lunch: boolean;
+    dinner: boolean;
+    vitamin_d_taken: boolean;
+    radiation_badge_worn: boolean;
+    cabin_temp_c: number;
+    ear_protection_used: boolean;
+    symptoms: SymptomKey[];
+  }>({
+    glucose_context: "fasting",
+    bedtime: "22:30",
+    wake_time: "06:30",
+    sleep_quality: 4,
+    sleep_medication: false,
+    energy_level: 4,
+    stress_level: 4,
+    cardio_minutes: 70,
+    resistance_minutes: 60,
+    calories_kcal: 2600,
+    water_liters: 2.4,
+    breakfast: true,
+    lunch: true,
+    dinner: true,
+    vitamin_d_taken: true,
+    radiation_badge_worn: true,
+    cabin_temp_c: 22.5,
+    ear_protection_used: true,
+    symptoms: [],
   });
   const [isSubmittingCheckIn, setIsSubmittingCheckIn] = useState<boolean>(false);
   const [checkInFeedback, setCheckInFeedback] = useState<string>("");
@@ -198,8 +307,11 @@ export default function AegisBioApp() {
   });
   const [crewFeedback, setCrewFeedback] = useState<string>("");
 
+  const myChatAstroId = leadProfile?.callsign || leadProfile?.username || "";
+
   const loadAllData = useCallback(
     async (astroFilter?: string, customScale?: "DAILY" | "WEEKLY" | "MONTHLY") => {
+      if (!leadToken) return;
       const myId = leadProfile?.callsign || leadProfile?.username;
       const targetAstro = leadProfile?.is_lead
         ? (astroFilter !== undefined ? astroFilter : selectedAstroId || undefined)
@@ -214,7 +326,7 @@ export default function AegisBioApp() {
         api.getTrajectoryForecast(targetAstro, horizon, targetScale),
         api.getEmergencyStatus(targetAstro),
         api.getAllAlarms(targetAstro),
-        api.getChatHistory(targetAstro),
+        myId ? api.getChatHistory(myId) : Promise.resolve([]),
       ]);
 
       if (results[0].status === "fulfilled") setCrew(results[0].value.crew || []);
@@ -236,7 +348,7 @@ export default function AegisBioApp() {
       if (results[6].status === "fulfilled") setAllAlarms(results[6].value || []);
       if (results[7].status === "fulfilled") setChatHistory(results[7].value || []);
     },
-    [selectedAstroId, timeScale, leadProfile]
+    [selectedAstroId, timeScale, leadProfile, leadToken]
   );
 
   const handleTimeScaleChange = async (newScale: "DAILY" | "WEEKLY" | "MONTHLY") => {
@@ -261,14 +373,16 @@ export default function AegisBioApp() {
     setLeadFeedback("");
     try {
       const res = await api.loginWithKey(leadLoginForm.username, leadLoginForm.key);
-      setLeadToken(res.access_token);
+      const u = res.user || res;
       const prof = {
-        username: res.username,
-        station_name: res.station_name,
-        crew_name: res.crew_name,
-        callsign: res.callsign,
-        is_lead: res.is_lead,
+        username: u.username,
+        station_name: u.station_name,
+        crew_name: u.crew_name,
+        callsign: u.callsign,
+        is_lead: u.is_lead,
       };
+      setChatHistory([]);
+      setLeadToken(res.access_token);
       setLeadProfile(prof);
       try {
         localStorage.setItem("aegis_station_token", res.access_token);
@@ -276,9 +390,8 @@ export default function AegisBioApp() {
       } catch {
         // ignore
       }
-      setLeadFeedback(`Authenticated as Crew Lead for ${res.crew_name} on ${res.station_name}`);
+      setLeadFeedback(`Authenticated as Crew Lead for ${prof.crew_name} on ${prof.station_name}`);
       setIsAuthModalOpen(false);
-      await loadAllData();
     } catch (err: any) {
       setLeadFeedback(`Login failed: ${err.message}`);
     }
@@ -289,14 +402,16 @@ export default function AegisBioApp() {
     setLeadFeedback("");
     try {
       const res = await api.registerLead(leadRegisterForm);
-      setLeadToken(res.access_token);
+      const u = res.user || res;
       const prof = {
-        username: res.username,
-        station_name: res.station_name,
-        crew_name: res.crew_name,
-        callsign: res.callsign,
-        is_lead: res.is_lead,
+        username: u.username,
+        station_name: u.station_name,
+        crew_name: u.crew_name,
+        callsign: u.callsign,
+        is_lead: u.is_lead,
       };
+      setChatHistory([]);
+      setLeadToken(res.access_token);
       setLeadProfile(prof);
       try {
         localStorage.setItem("aegis_station_token", res.access_token);
@@ -304,9 +419,8 @@ export default function AegisBioApp() {
       } catch {
         // ignore
       }
-      setLeadFeedback(`Station Lead registered: ${res.crew_name} on ${res.station_name}`);
+      setLeadFeedback(`Station Lead registered: ${prof.crew_name} on ${prof.station_name}`);
       setIsAuthModalOpen(false);
-      await loadAllData();
     } catch (err: any) {
       setLeadFeedback(`Registration failed: ${err.message}`);
     }
@@ -315,6 +429,18 @@ export default function AegisBioApp() {
   const handleSignOut = () => {
     setLeadToken("");
     setLeadProfile(null);
+    setSelectedAstroId("");
+    setChatHistory([]);
+    setChatError("");
+    setIsChatOpen(false);
+    setCrew([]);
+    setHistory([]);
+    setLatestMetrics(null);
+    setTriage(null);
+    setForecast(null);
+    setActiveAlert(null);
+    setAllAlarms([]);
+    setJustCheckedInAstroIds([]);
     try {
       localStorage.removeItem("aegis_station_token");
       localStorage.removeItem("aegis_station_profile");
@@ -350,6 +476,7 @@ export default function AegisBioApp() {
     astroId: string,
     prompt: string
   ) => {
+    const chatOwner = myChatAstroId || astroId;
     // 1. Immediately open and expand the chatbot interface
     setIsChatOpen(true);
     setIsChatExpanded(true);
@@ -357,7 +484,7 @@ export default function AegisBioApp() {
     // 2. Append optimistic user turn so prompt appears immediately
     const userTurn: ChatHistoryItem = {
       id: Date.now(),
-      astronaut_id: astroId,
+      astronaut_id: chatOwner,
       role: "user",
       content: prompt,
       citations: [],
@@ -370,7 +497,7 @@ export default function AegisBioApp() {
       const reply = await api.queryFlightSurgeon(prompt, astroId);
       const assistantTurn: ChatHistoryItem = {
         id: Date.now() + 1,
-        astronaut_id: astroId,
+        astronaut_id: chatOwner,
         role: "assistant",
         content: reply.content,
         citations: reply.citations || [],
@@ -389,36 +516,122 @@ export default function AegisBioApp() {
     setIsSubmittingCheckIn(true);
     setCheckInFeedback("");
     try {
-      await api.ingestMetrics(checkInForm);
-      setJustCheckedInAstroIds((prev) =>
-        prev.includes(checkInForm.astronaut_id) ? prev : [...prev, checkInForm.astronaut_id]
-      );
-      await loadAllData(checkInForm.astronaut_id);
+      const rawAstroId = !leadProfile?.is_lead
+        ? leadProfile?.callsign || leadProfile?.username || checkInForm.astronaut_id || "ASTRO-01"
+        : checkInForm.astronaut_id || selectedAstroId || "ASTRO-01";
+      const sanitizedAstroId = rawAstroId.trim().replace(/\s+/g, "-");
+      const checkinPayload: DailyCheckInPayload = {
+        astronaut_id: sanitizedAstroId,
+        mission_day: Number(checkInForm.mission_day) || 1,
+        checkin_date: new Date().toISOString().slice(0, 10),
+        vitals: {
+          heart_rate: Number(checkInForm.heart_rate),
+          bp_sys: Number(checkInForm.bp_sys),
+          bp_dia: Number(checkInForm.bp_dia),
+          spo2: Number(checkInForm.spo2),
+          core_temp_c: Number(checkInForm.core_temp_c ?? 36.8),
+          blood_glucose: Number(checkInForm.blood_glucose ?? 92),
+          glucose_context: checkInExtras.glucose_context,
+          hrv_rmssd: Number(checkInForm.hrv_rmssd ?? 48),
+        },
+        sleep: {
+          bedtime: checkInExtras.bedtime,
+          wake_time: checkInExtras.wake_time,
+          sleep_hours: Number(checkInForm.sleep_hours ?? 7.0),
+          sleep_quality: checkInExtras.sleep_quality,
+          sleep_medication: checkInExtras.sleep_medication,
+        },
+        wellbeing: {
+          mood_score: Math.min(5, Math.max(1, Math.round(Number(checkInForm.mood_score || 4)))),
+          energy_level: checkInExtras.energy_level,
+          stress_level: checkInExtras.stress_level,
+        },
+        exercise: {
+          cardio_minutes: Number(checkInExtras.cardio_minutes),
+          resistance_minutes: Number(checkInExtras.resistance_minutes),
+        },
+        nutrition: {
+          calories_kcal: Number(checkInExtras.calories_kcal),
+          water_liters: Number(checkInExtras.water_liters),
+          breakfast: checkInExtras.breakfast,
+          lunch: checkInExtras.lunch,
+          dinner: checkInExtras.dinner,
+          vitamin_d_taken: checkInExtras.vitamin_d_taken,
+        },
+        environment: {
+          radiation_msv: Number(checkInForm.radiation_msv ?? 0.85),
+          radiation_badge_worn: checkInExtras.radiation_badge_worn,
+          cabin_temp_c: Number(checkInExtras.cabin_temp_c),
+          cabin_co2_mmhg: Number(checkInForm.cabin_co2_mmhg ?? 2.6),
+          ear_protection_used: checkInExtras.ear_protection_used,
+        },
+        symptoms: checkInExtras.symptoms,
+      };
 
-      // Fetch fresh classification results
-      const triageRes = await api.getCurrentTriage(checkInForm.astronaut_id).catch(() => null);
-      const status = triageRes?.overall_status || "NOMINAL";
-      const riskScore = triageRes?.overall_risk_score ?? 0;
-      const flags =
-        triageRes?.clinical_flags && triageRes.clinical_flags.length > 0
-          ? triageRes.clinical_flags.join("; ")
-          : "All parameters within standard aerospace envelope";
-      const vitalsSummary = `HR: ${checkInForm.heart_rate} bpm, SpO2: ${checkInForm.spo2}%, Sleep: ${checkInForm.sleep_hours}h, Dose: ${checkInForm.radiation_msv} mSv, CO2: ${checkInForm.cabin_co2_mmhg} mmHg`;
+      let record;
+      try {
+        record = await api.submitDailyCheckIn(checkinPayload);
+      } catch (submitErr: any) {
+        if (submitErr?.status === 409) {
+          // If already checked in today on this sol, ingest latest telemetry
+          await api.ingestMetrics({ ...checkInForm, astronaut_id: sanitizedAstroId });
+        } else {
+          throw submitErr;
+        }
+      }
+
+      setJustCheckedInAstroIds((prev) =>
+        prev.includes(sanitizedAstroId) ? prev : [...prev, sanitizedAstroId]
+      );
+      setSelectedAstroId(sanitizedAstroId);
+      setLatestMetrics({
+        astronaut_id: sanitizedAstroId,
+        mission_day: checkinPayload.mission_day,
+        heart_rate: checkinPayload.vitals.heart_rate,
+        bp_sys: checkinPayload.vitals.bp_sys,
+        bp_dia: checkinPayload.vitals.bp_dia,
+        spo2: checkinPayload.vitals.spo2,
+        core_temp_c: checkinPayload.vitals.core_temp_c,
+        blood_glucose: checkinPayload.vitals.blood_glucose,
+        hrv_rmssd: checkinPayload.vitals.hrv_rmssd,
+        sleep_hours: checkinPayload.sleep.sleep_hours,
+        mood_score: checkinPayload.wellbeing.mood_score,
+        radiation_msv: checkinPayload.environment.radiation_msv,
+        created_at: new Date().toISOString(),
+      });
+      await loadAllData(sanitizedAstroId);
+
+      const assessment = record?.assessment;
+      const status = assessment?.status || "NOMINAL";
+      const hazard = assessment?.hazard || "Spaceflight Adaptation";
+      const concern = assessment?.concern_label || assessment?.primary_concern || "Routine Telemetry";
+      const reasons = assessment?.safety_reasons?.join("; ") || "Nominal thresholds maintained";
+      const factors =
+        assessment?.key_factors?.map((f: any) => `${f.factor}: ${f.value}`).join(", ") ||
+        "All parameters within nominal operational limits";
+      const symptomLabels =
+        checkInExtras.symptoms.length > 0
+          ? checkInExtras.symptoms.map((s) => SYMPTOMS.find((x) => x.key === s)?.label || s).join(", ")
+          : "None reported";
 
       setCheckInFeedback(
-        `Saved check-in for ${checkInForm.astronaut_id} (Sol ${checkInForm.mission_day}). Classifier status: ${status}. Opening AstroDoc for next steps...`
+        `Check-in complete for ${sanitizedAstroId} (Sol ${checkInForm.mission_day}). Classifier status: ${status}. Opening AstroDoc for next steps...`
       );
 
-      const prompt = `[DAILY HEALTH CHECK-IN CLASSIFICATION REPORT]
-Astronaut: ${checkInForm.astronaut_id} (Sol ${checkInForm.mission_day})
-Classification Status: ${status} (Risk Score: ${riskScore}/100)
-Clinical Flags / Abnormalities: ${flags}
-Vitals Logged: ${vitalsSummary}
+      const prompt = `**DAILY HEALTH CHECK-IN CLASSIFICATION REPORT**
+**Astronaut:** ${sanitizedAstroId} (Sol ${checkInForm.mission_day})
+**Classification Status:** ${status}
+**Primary Hazard:** ${hazard}
+**Primary Concern:** ${concern}
+**Safety Floor Directives:** ${reasons}
+**Key Predictive Factors:** ${factors}
+**Vitals & Environment Logged:** HR ${checkInForm.heart_rate} bpm, SpO2 ${checkInForm.spo2}%, BP ${checkInForm.bp_sys}/${checkInForm.bp_dia} mmHg, Sleep ${checkInForm.sleep_hours}h, Radiation ${checkInForm.radiation_msv} mSv, Cabin CO2 ${checkInForm.cabin_co2_mmhg} mmHg, Temp ${checkInForm.core_temp_c}°C, HRV ${checkInForm.hrv_rmssd} ms, Glucose ${checkInForm.blood_glucose} mg/dL (${checkInExtras.glucose_context})
+**Symptoms:** ${symptomLabels}
 
-Classifier results are ready. What is your clinical evaluation, what specific countermeasures should be applied, and what should the crew do next?`;
+Classifier results are ready. What is your clinical evaluation, what specific countermeasures should I apply, and what should I do next?`;
 
       // Dispatch directly to chatbot and open interface
-      await dispatchClassifierResultsToChatbot(checkInForm.astronaut_id, prompt);
+      await dispatchClassifierResultsToChatbot(sanitizedAstroId, prompt);
     } catch (err: any) {
       setCheckInFeedback(`Error: ${err.message || "Failed to save check-in"}`);
     } finally {
@@ -450,15 +663,15 @@ Classifier results are ready. What is your clinical evaluation, what specific co
       `Submitted guided check-in for ${astroId}. Classifier status: ${status}. Opening AstroDoc for clinical guidance...`
     );
 
-    const prompt = `[DAILY HEALTH CHECK-IN CLASSIFICATION REPORT]
-Astronaut: ${astroId} (Sol ${sol})
-Classification Status: ${status}
-Primary Hazard: ${hazard}
-Primary Concern: ${concern}
-Safety Floor Directives: ${reasons}
-Key Predictive Factors: ${factors}
+    const prompt = `**DAILY HEALTH CHECK-IN CLASSIFICATION REPORT**
+**Astronaut:** ${astroId} (Sol ${sol})
+**Classification Status:** ${status}
+**Primary Hazard:** ${hazard}
+**Primary Concern:** ${concern}
+**Safety Floor Directives:** ${reasons}
+**Key Predictive Factors:** ${factors}
 
-Classifier results are ready. What is your clinical evaluation, what specific countermeasures should be applied, and what should the crew do next?`;
+Classifier results are ready. What is your clinical evaluation, what specific countermeasures should I apply, and what should I do next?`;
 
     // Dispatch directly to chatbot and open interface
     await dispatchClassifierResultsToChatbot(astroId, prompt);
@@ -480,20 +693,24 @@ Classifier results are ready. What is your clinical evaluation, what specific co
     }
   };
 
-  // Send query to AstroDoc AI Flight Surgeon
+  // Send query to AstroDoc AI Flight Surgeon (strictly scoped to signed-in member)
   const handleSendChat = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!chatInput.trim() || isSendingChat) return;
+    const chatOwner = myChatAstroId || selectedAstroId;
+    if (!chatOwner) {
+      setChatError("Sign in to chat with AstroDoc.");
+      return;
+    }
     setIsSendingChat(true);
     setChatError("");
     const q = chatInput.trim();
     setChatInput("");
 
     // Optimistic append so user sees message immediately
-    const target = selectedAstroId || latestMetrics?.astronaut_id || "CM-1 Ibarra";
     const tempUserMsg: ChatHistoryItem = {
       id: Date.now(),
-      astronaut_id: target,
+      astronaut_id: chatOwner,
       role: "user",
       content: q,
       citations: [],
@@ -502,8 +719,8 @@ Classifier results are ready. What is your clinical evaluation, what specific co
     setChatHistory((prev) => [...prev, tempUserMsg]);
 
     try {
-      const reply = await api.queryFlightSurgeon(q, target);
-      const updatedChat = await api.getChatHistory(selectedAstroId || undefined).catch(() => null);
+      const reply = await api.queryFlightSurgeon(q, chatOwner);
+      const updatedChat = await api.getChatHistory(chatOwner).catch(() => null);
       if (updatedChat && updatedChat.length > 0) {
         setChatHistory(updatedChat);
       } else {
@@ -511,7 +728,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
           ...prev,
           {
             id: Date.now() + 1,
-            astronaut_id: target,
+            astronaut_id: chatOwner,
             role: "assistant",
             content: reply.content,
             citations: reply.citations || [],
@@ -590,6 +807,14 @@ Classifier results are ready. What is your clinical evaluation, what specific co
     }
     return "UNCLASSIFIED";
   };
+
+  const overallBodyStatus: StatusKey = !latestMetrics
+    ? "NODATA"
+    : [0, 1, 2, 4].some((i) => vitalStatus(i) === "CRITICAL")
+    ? "CRITICAL"
+    : [0, 1, 2, 4].some((i) => vitalStatus(i) === "MEDIUM")
+    ? "MEDIUM"
+    : "NORMAL";
 
   // Series for the main overview SVG chart (aligned 1:1 with the last 7 logged Sols)
   const chartHistory = history.slice(-7);
@@ -721,38 +946,50 @@ Classifier results are ready. What is your clinical evaluation, what specific co
   }, [activeAstroId, justCheckedInAstroIds, crew, latestMetrics, nowTick]);
 
   const isReminderPending = !hasCheckedInToday;
-  const isFloatingReminderVisible =
-    isReminderPending &&
-    nowTick >= reminderSnoozedUntil &&
-    activeScreen !== "daily-checkin" &&
-    !isModalCheckInOpen;
-
-  const reminderWindowLabel = React.useMemo(() => {
-    const hr = new Date(nowTick).getHours();
-    if (hr < 12) return "Morning Window · Pre-Shift Biometrics Due";
-    if (hr < 18) return "Mid-Sol Window · Daily Biometric Check-in Overdue";
-    return "End-of-Sol Window · Final Daily Check-in Required";
-  }, [nowTick]);
-
   const unackAlertsCount = allAlarms.filter((a) => !a.acknowledged).length;
   const totalNotifCount = unackAlertsCount + (isReminderPending ? 1 : 0);
-  const currentMeta = SCREEN_META[activeScreen];
+
+  // Wait for LocalStorage session check before deciding auth screen (avoids reload sign-out flash)
+  if (!isAuthChecked) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          width: "100vw",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "#0C0E12",
+          color: "#94A3B8",
+          fontFamily: "'JetBrains Mono', monospace",
+          fontSize: "12px",
+          letterSpacing: "0.14em",
+          textTransform: "uppercase",
+        }}
+      >
+        Restoring Station Session...
+      </div>
+    );
+  }
 
   // FIRST PAGE: Dedicated Station Login Page if not authenticated
   if (!leadToken) {
     return (
       <StationLoginPage
         onLoginSuccess={(token, profile) => {
-          setLeadToken(token);
-          setLeadProfile(profile);
+          setChatHistory([]);
           try {
             localStorage.setItem("aegis_station_token", token);
             localStorage.setItem("aegis_station_profile", JSON.stringify(profile));
           } catch {
             // ignore
           }
-          if (profile.callsign || profile.username) {
-            setSelectedAstroId(profile.callsign || profile.username);
+          setLeadToken(token);
+          setLeadProfile(profile);
+          if (profile?.callsign || profile?.username) {
+            const astroId = profile.callsign || profile.username;
+            setSelectedAstroId(astroId);
+            setCheckInForm((prev) => ({ ...prev, astronaut_id: astroId }));
           }
         }}
       />
@@ -777,7 +1014,19 @@ Classifier results are ready. What is your clinical evaluation, what specific co
           LEFT NAVIGATION SIDEBAR (212px, var(--bio-surface), border var(--bio-border-subtle))
       ===================================================================== */}
       {showLeftNav && (
-        <div style={{ flex: "0 0 212px", borderRight: "1px solid var(--bio-border-subtle)", position: "relative", zIndex: 20 }}>
+        <div
+          style={{
+            flex: "0 0 212px",
+            borderRight: "1px solid var(--bio-border-subtle)",
+            position: "sticky",
+            top: 0,
+            height: "100vh",
+            overflowY: "auto",
+            alignSelf: "flex-start",
+            zIndex: 20,
+            background: "var(--bio-surface)",
+          }}
+        >
           <nav
             aria-label="Main"
             style={{
@@ -824,7 +1073,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                   strokeLinejoin="round"
                 />
               </svg>
-              <span style={{ fontWeight: 600 }}>Aegis-Bio</span>
+              <span style={{ fontWeight: 600 }}>Apex</span>
             </button>
 
             {/* Pinned */}
@@ -989,35 +1238,6 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                 </button>
               )}
 
-              <button
-                type="button"
-                onClick={() => setActiveScreen("hazards")}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "8px",
-                  height: "36px",
-                  padding: "0 8px 0 28px",
-                  borderRadius: "8px",
-                  color: "#FFFFFF",
-                  border: "none",
-                  cursor: "pointer",
-                  width: "100%",
-                  textAlign: "left",
-                  whiteSpace: "nowrap",
-                  background: activeScreen === "hazards" ? "rgba(255,255,255,0.1)" : "transparent",
-                }}
-              >
-                <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                  <path
-                    d="M10 2 L16.5 4.5 V9.5 C16.5 13.5 13.8 16.5 10 18 C6.2 16.5 3.5 13.5 3.5 9.5 V4.5 Z"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-                Space Hazards
-              </button>
             </div>
 
             {/* Clinical Group */}
@@ -1079,43 +1299,6 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                 )}
               </button>
             </div>
-
-            {/* Mission Group */}
-            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-              <span style={{ padding: "4px 8px", color: "#A3A3A3" }}>Mission</span>
-
-              <button
-                type="button"
-                onClick={() => setActiveScreen("thresholds")}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "8px",
-                  height: "36px",
-                  padding: "0 8px 0 28px",
-                  borderRadius: "8px",
-                  color: "#FFFFFF",
-                  border: "none",
-                  cursor: "pointer",
-                  width: "100%",
-                  textAlign: "left",
-                  whiteSpace: "nowrap",
-                  background:
-                    activeScreen === "thresholds" ? "rgba(255,255,255,0.1)" : "transparent",
-                }}
-              >
-                <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                  <circle cx="10" cy="10" r="2.5" stroke="currentColor" strokeWidth="1.5" />
-                  <path
-                    d="M10 2.5 V4.5 M10 15.5 V17.5 M2.5 10 H4.5 M15.5 10 H17.5 M4.7 4.7 L6.1 6.1 M13.9 13.9 L15.3 15.3 M4.7 15.3 L6.1 13.9 M13.9 6.1 L15.3 4.7"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                  />
-                </svg>
-                Thresholds
-              </button>
-            </div>
           </nav>
         </div>
       )}
@@ -1145,6 +1328,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
               type="button"
               onClick={() => setShowLeftNav((v) => !v)}
               aria-label="Toggle navigation"
+              title={showLeftNav ? "Hide sidebar" : "Show sidebar"}
               style={{
                 width: "36px",
                 height: "36px",
@@ -1162,15 +1346,6 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                 <path d="M8 4 V16" stroke="#FFFFFF" strokeWidth="1.5" />
               </svg>
             </button>
-            <span style={{ marginLeft: "8px", color: "#A3A3A3" }}>{currentMeta.section}</span>
-            <span style={{ color: "#6B6B6B" }}>/</span>
-            <span>{currentMeta.title}</span>
-            {selectedAstroId && (
-              <>
-                <span style={{ color: "#6B6B6B" }}>/</span>
-                <span style={{ color: "#7DD3FC" }}>{selectedAstroId}</span>
-              </>
-            )}
           </div>
 
           <div
@@ -1182,27 +1357,6 @@ Classifier results are ready. What is your clinical evaluation, what specific co
               flexWrap: "wrap",
             }}
           >
-            <span
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                height: "32px",
-                padding: "0 12px",
-                borderRadius: "8px",
-                background: "#282828",
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: "12px",
-                color: "#A3A3A3",
-              }}
-            >
-              MET{" "}
-              <span style={{ color: "#FFFFFF" }}>
-                {String(latestMetrics?.mission_day || 1).padStart(3, "0")}/07:32:18
-              </span>{" "}
-              · Earth <span style={{ color: "#FFFFFF" }}>+14m 22s</span>
-            </span>
-
             <button
               type="button"
               onClick={() => loadAllData()}
@@ -1242,237 +1396,62 @@ Classifier results are ready. What is your clinical evaluation, what specific co
               </svg>
             </button>
 
-            <div style={{ position: "relative" }}>
-              <button
-                type="button"
-                onClick={() => setIsNotifOpen((v) => !v)}
-                aria-label="Notifications"
-                title="Notifications & Daily Check-in Reminders"
-                style={{
-                  position: "relative",
-                  width: "36px",
-                  height: "36px",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  borderRadius: "8px",
-                  background: isNotifOpen ? "#282828" : "transparent",
-                  border: isReminderPending ? "1px solid rgba(245, 158, 11, 0.45)" : "none",
-                  cursor: "pointer",
-                }}
-              >
-                <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                  <path
-                    d="M5 8 A5 5 0 0 1 15 8 V12 L16.5 14.5 H3.5 L5 12 Z"
-                    stroke={isReminderPending ? "#FBBF24" : "#FFFFFF"}
-                    strokeWidth="1.5"
-                    strokeLinejoin="round"
-                  />
-                  <path
-                    d="M8.2 17 A2 2 0 0 0 11.8 17"
-                    stroke={isReminderPending ? "#FBBF24" : "#FFFFFF"}
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                  />
-                </svg>
-                {totalNotifCount > 0 && (
-                  <span
-                    style={{
-                      position: "absolute",
-                      top: "3px",
-                      right: "3px",
-                      minWidth: "16px",
-                      height: "16px",
-                      padding: "0 4px",
-                      borderRadius: "999px",
-                      background: unackAlertsCount > 0 ? "#EF4444" : "#F59E0B",
-                      color: "#1C1C1C",
-                      fontSize: "10px",
-                      fontWeight: 700,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      boxShadow: "0 0 0 2px #1C1C1C",
-                    }}
-                  >
-                    {totalNotifCount}
-                  </span>
-                )}
-              </button>
-
-              {isNotifOpen && (
-                <div
-                  role="dialog"
-                  aria-label="Station Notifications"
-                  style={{
-                    position: "absolute",
-                    top: "44px",
-                    right: 0,
-                    zIndex: 80,
-                    width: "340px",
-                    borderRadius: "14px",
-                    background: "#1C1C1C",
-                    border: "1px solid #333333",
-                    boxShadow: "0 16px 40px rgba(0, 0, 0, 0.65)",
-                    padding: "14px",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "12px",
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <span style={{ fontSize: "13px", fontWeight: 600, color: "#FFFFFF" }}>
-                      Notifications ({totalNotifCount})
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setIsNotifOpen(false);
-                        setActiveScreen("alerts");
-                      }}
-                      style={{
-                        background: "transparent",
-                        border: "none",
-                        color: "#7DD3FC",
-                        fontSize: "11px",
-                        cursor: "pointer",
-                      }}
-                    >
-                      Open Alerts Console →
-                    </button>
-                  </div>
-
-                  {isReminderPending ? (
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: "8px",
-                        padding: "12px",
-                        borderRadius: "10px",
-                        background: "linear-gradient(135deg, rgba(245, 158, 11, 0.16), rgba(125, 211, 252, 0.08))",
-                        border: "1px solid rgba(245, 158, 11, 0.5)",
-                      }}
-                    >
-                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                        <span style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", fontWeight: 700, color: "#FBBF24" }}>
-                          <span
-                            style={{
-                              width: "7px",
-                              height: "7px",
-                              borderRadius: "50%",
-                              background: "#F59E0B",
-                              boxShadow: "0 0 8px #F59E0B",
-                            }}
-                          />
-                          Daily Check-in Required
-                        </span>
-                        <span style={{ fontSize: "10px", color: "#FDE68A", fontFamily: "'JetBrains Mono', monospace" }}>
-                          SOL {checkInForm.mission_day}
-                        </span>
-                      </div>
-                      <div style={{ fontSize: "12px", color: "#E5E5E5", lineHeight: "16px" }}>
-                        <strong>{activeAstroId}</strong> has not submitted today&apos;s biometric &amp; habitat health check-in.
-                      </div>
-                      <div style={{ fontSize: "11px", color: "#A3A3A3" }}>{reminderWindowLabel}</div>
-                      <div style={{ display: "flex", gap: "6px", marginTop: "2px" }}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIsNotifOpen(false);
-                            setActiveScreen("daily-checkin");
-                          }}
-                          style={{
-                            flex: 1,
-                            height: "30px",
-                            borderRadius: "7px",
-                            border: "none",
-                            background: "#F59E0B",
-                            color: "#1C1C1C",
-                            fontSize: "11px",
-                            fontWeight: 700,
-                            cursor: "pointer",
-                          }}
-                        >
-                          Log Check-in Now
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setIsNotifOpen(false);
-                            setIsModalCheckInOpen(true);
-                          }}
-                          style={{
-                            height: "30px",
-                            padding: "0 10px",
-                            borderRadius: "7px",
-                            border: "1px solid rgba(125,211,252,0.45)",
-                            background: "rgba(125,211,252,0.12)",
-                            color: "#7DD3FC",
-                            fontSize: "11px",
-                            fontWeight: 600,
-                            cursor: "pointer",
-                          }}
-                        >
-                          Guided Sheet
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div
-                      style={{
-                        padding: "10px 12px",
-                        borderRadius: "10px",
-                        background: "rgba(150, 226, 214, 0.08)",
-                        border: "1px solid rgba(150, 226, 214, 0.3)",
-                        fontSize: "12px",
-                        color: "#96E2D6",
-                      }}
-                    >
-                      ✓ Daily check-in completed for <strong>{activeAstroId}</strong> today.
-                    </div>
-                  )}
-
-                  {allAlarms.filter((a) => !a.acknowledged).slice(0, 3).map((al) => (
-                    <div
-                      key={al.alert_id}
-                      style={{
-                        padding: "10px",
-                        borderRadius: "8px",
-                        background: "#3B2323",
-                        border: "1px solid #EF4444",
-                        fontSize: "11px",
-                        color: "#FCA5A5",
-                      }}
-                    >
-                      <div style={{ fontWeight: 700 }}>{al.astronaut_id} · {al.severity}</div>
-                      <div style={{ color: "#E5E5E5", marginTop: "2px" }}>{al.message}</div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
             <button
               type="button"
               onClick={() => setShowRightPanel((v) => !v)}
-              aria-label="Toggle side panel"
+              aria-label="Notifications"
+              aria-expanded={showRightPanel}
+              title="Notifications & Alerts"
               style={{
+                position: "relative",
                 width: "36px",
                 height: "36px",
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                border: "none",
                 borderRadius: "8px",
-                background: "transparent",
+                background: showRightPanel ? "#282828" : "transparent",
+                border: isReminderPending ? "1px solid rgba(245, 158, 11, 0.45)" : "none",
                 cursor: "pointer",
               }}
             >
               <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                <rect x="3" y="4" width="14" height="12" rx="2" stroke="#FFFFFF" strokeWidth="1.5" />
-                <path d="M12 4 V16" stroke="#FFFFFF" strokeWidth="1.5" />
+                <path
+                  d="M5 8 A5 5 0 0 1 15 8 V12 L16.5 14.5 H3.5 L5 12 Z"
+                  stroke={isReminderPending ? "#FBBF24" : "#FFFFFF"}
+                  strokeWidth="1.5"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M8.2 17 A2 2 0 0 0 11.8 17"
+                  stroke={isReminderPending ? "#FBBF24" : "#FFFFFF"}
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                />
               </svg>
+              {totalNotifCount > 0 && (
+                <span
+                  style={{
+                    position: "absolute",
+                    top: "3px",
+                    right: "3px",
+                    minWidth: "16px",
+                    height: "16px",
+                    padding: "0 4px",
+                    borderRadius: "999px",
+                    background: unackAlertsCount > 0 ? "#EF4444" : "#F59E0B",
+                    color: "#1C1C1C",
+                    fontSize: "10px",
+                    fontWeight: 700,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    boxShadow: "0 0 0 2px #1C1C1C",
+                  }}
+                >
+                  {totalNotifCount}
+                </span>
+              )}
             </button>
 
             {/* Station User Authentication Status & Sign Out */}
@@ -1492,7 +1471,6 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                     color: "#7DD3FC",
                   }}
                 >
-                  <span>🧑‍🚀</span>
                   <span style={{ fontWeight: 600 }}>{leadProfile.callsign || leadProfile.username}</span>
                   <span style={{ color: "#A3A3A3", fontSize: "11px" }}>({leadProfile.crew_name})</span>
                 </div>
@@ -1565,224 +1543,387 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                 </Button>
               </header>
 
-              {/* Vitals. Status comes from the backend classifier (single source of truth). */}
-              <div className="grid grid-cols-1 gap-bio-4 min-[520px]:grid-cols-2 2xl:grid-cols-4">
-                <MetricCard
-                  label="Heart rate"
-                  value={latestMetrics ? String(Math.round(latestMetrics.heart_rate)) : null}
-                  unit="bpm"
-                  status={vitalStatus(0)}
-                  delta={deltaLabel(latestMetrics?.heart_rate, prevMetrics?.heart_rate)}
-                  range={VITAL_RANGES.heart_rate}
-                />
-                <MetricCard
-                  label="Blood oxygen (SpO₂)"
-                  value={latestMetrics ? Number(latestMetrics.spo2).toFixed(1) : null}
-                  unit="%"
-                  status={vitalStatus(1)}
-                  delta={deltaLabel(latestMetrics?.spo2, prevMetrics?.spo2)}
-                  range={VITAL_RANGES.spo2}
-                />
-                <MetricCard
-                  label="Sleep"
-                  value={latestMetrics ? Number(latestMetrics.sleep_hours).toFixed(1) : null}
-                  unit="h"
-                  status={vitalStatus(2)}
-                  delta={deltaLabel(latestMetrics?.sleep_hours, prevMetrics?.sleep_hours)}
-                  range={VITAL_RANGES.sleep_hours}
-                />
-                <MetricCard
-                  label="Radiation dose today"
-                  value={latestMetrics ? Number(latestMetrics.radiation_msv).toFixed(2) : null}
-                  unit="mSv"
-                  status={vitalStatus(4)}
-                  delta={deltaLabel(latestMetrics?.radiation_msv, prevMetrics?.radiation_msv)}
-                  range={VITAL_RANGES.radiation_msv}
-                />
-              </div>
+              {/* 3-Column Biometric Stage: Left Metrics/Diagrams | Center 3D Rotating Model | Right Metrics/Diagrams */}
+              <div className="grid grid-cols-1 items-stretch gap-bio-4 xl:grid-cols-[minmax(260px,1fr)_minmax(360px,460px)_minmax(260px,1fr)]">
+                {/* LEFT WING: Cardio/Oxygen Metrics + Trend + Out-of-Range Systems */}
+                <div className="order-2 flex flex-col gap-bio-4 xl:order-1 xl:h-full">
+                  <div className="grid grid-cols-1 gap-bio-4 min-[520px]:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+                    <MetricCard
+                      label="Heart rate"
+                      value={latestMetrics ? String(Math.round(latestMetrics.heart_rate)) : null}
+                      unit="bpm"
+                      status={vitalStatus(0)}
+                      delta={deltaLabel(latestMetrics?.heart_rate, prevMetrics?.heart_rate)}
+                      range={VITAL_RANGES.heart_rate}
+                    />
+                    <MetricCard
+                      label="Blood oxygen (SpO₂)"
+                      value={latestMetrics ? Number(latestMetrics.spo2).toFixed(1) : null}
+                      unit="%"
+                      status={vitalStatus(1)}
+                      delta={deltaLabel(latestMetrics?.spo2, prevMetrics?.spo2)}
+                      range={VITAL_RANGES.spo2}
+                    />
+                  </div>
 
-              {/* Trend + crew */}
-              <div className="grid gap-bio-4 2xl:grid-cols-[minmax(0,3fr)_minmax(260px,1fr)]">
-                <Panel aria-labelledby="trend-title">
-                  <PanelHeader
-                    titleId="trend-title"
-                    title="Trend"
-                    description="Last seven logged readings. The shaded band is the normal range."
-                    actions={
-                      <SegmentedTabs<ChartMetric>
-                        label="Metric"
-                        value={chartMetric}
-                        onChange={setChartMetric}
-                        options={[
-                          { value: "spo2", label: "SpO₂" },
-                          { value: "heart_rate", label: "Heart rate" },
-                          { value: "sleep", label: "Sleep" },
-                        ]}
-                      />
-                    }
-                  />
-
-                  {hasData ? (
-                    <>
-                      <ul className="flex flex-wrap gap-x-bio-4 gap-y-bio-2 text-bio-xs text-bio-text-secondary">
-                        <li className="inline-flex items-center gap-bio-2">
-                          <span className="h-0.5 w-bio-4 rounded-full bg-bio-primary" aria-hidden="true" />
-                          Logged readings
-                        </li>
-                        <li className="inline-flex items-center gap-bio-2">
-                          <span className="w-bio-4 border-t-2 border-dashed border-bio-text-muted" aria-hidden="true" />
-                          First reading
-                        </li>
-                        <li className="inline-flex items-center gap-bio-2">
-                          <span
-                            className="h-bio-3 w-bio-4 rounded-bio-sm border border-bio-nominal-border bg-bio-nominal-bg"
-                            aria-hidden="true"
-                          />
-                          Normal range
-                        </li>
-                      </ul>
-
-                      <div className="flex gap-bio-3">
-                        <div
-                          className="flex h-52 flex-col justify-between py-5 text-right font-mono text-bio-xs text-bio-text-muted"
-                          aria-hidden="true"
-                        >
-                          {chartBounds.labels.map((lbl, idx) => (
-                            <span key={idx}>{lbl}</span>
-                          ))}
-                        </div>
-                        <div className="flex min-w-0 flex-1 flex-col gap-bio-2">
-                          <svg
-                            role="img"
-                            aria-label={`${chartMetricLabel} over the last ${chartValues.length} readings. Latest: ${chartValues[chartValues.length - 1]}.`}
-                            className="block h-52 w-full"
-                            viewBox="0 0 600 200"
-                            preserveAspectRatio="none"
-                          >
-                            {[0, 1, 2, 3, 4].map((i) => (
-                              <line
-                                key={i}
-                                x1="0"
-                                x2="600"
-                                y1={20 + i * 40}
-                                y2={20 + i * 40}
-                                className="stroke-bio-border-subtle"
-                                strokeWidth="1"
-                                vectorEffect="non-scaling-stroke"
-                              />
-                            ))}
-                            <rect
-                              x="0"
-                              width="600"
-                              y={chartBand.y}
-                              height={chartBand.height}
-                              className="fill-bio-nominal-bg"
-                            />
-                            <path
-                              d={baselinePath}
-                              fill="none"
-                              className="stroke-bio-text-muted"
-                              strokeWidth="1.5"
-                              strokeDasharray="5 5"
-                              vectorEffect="non-scaling-stroke"
-                            />
-                            <path
-                              d={primaryPath}
-                              fill="none"
-                              className="stroke-bio-primary"
-                              strokeWidth="2.5"
-                              strokeLinejoin="round"
-                              strokeLinecap="round"
-                              vectorEffect="non-scaling-stroke"
-                            />
-                          </svg>
-                          <div className="flex justify-between font-mono text-bio-xs text-bio-text-muted">
-                            {chartHistory.map((h, i) => (
-                              <span key={i}>Sol {h.mission_day}</span>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    </>
-                  ) : (
-                    <EmptyState
-                      className="min-h-56"
-                      title="No readings logged yet"
-                      body="Log a daily check-in to start the trend line and the vital forecast."
-                      action={
-                        <Button onClick={() => setActiveScreen("daily-checkin")}>Open daily check-in</Button>
+                  <Panel aria-labelledby="trend-title">
+                    <PanelHeader
+                      titleId="trend-title"
+                      title="Trend"
+                      description="Last seven logged readings. The shaded band is the normal range."
+                      actions={
+                        <SegmentedTabs<ChartMetric>
+                          label="Metric"
+                          value={chartMetric}
+                          onChange={setChartMetric}
+                          options={[
+                            { value: "spo2", label: "SpO₂" },
+                            { value: "heart_rate", label: "Heart rate" },
+                            { value: "sleep", label: "Sleep" },
+                          ]}
+                        />
                       }
                     />
-                  )}
-                </Panel>
 
-                <Panel aria-labelledby="crew-vitals-title">
-                  <PanelHeader
-                    titleId="crew-vitals-title"
-                    title="Crew vitals"
-                    description="Select a crew member to filter this page. Bars show heart rate, SpO₂, sleep, temperature and dose."
-                  />
-                  {crew.length > 0 ? (
-                    <ul className="flex flex-col gap-bio-1">
-                      {crew.map((m) => {
-                        const selected = m.id === selectedAstroId;
-                        return (
-                          <li key={m.id}>
-                            <button
-                              type="button"
-                              aria-pressed={selected}
-                              onClick={() => setSelectedAstroId(selected ? "" : m.id)}
-                              className={`bio-focus flex w-full items-center justify-between gap-bio-3 rounded-bio-md border px-bio-3 py-bio-2 text-left transition-colors duration-150 hover:bg-bio-surface-hover active:bg-bio-surface-active ${
-                                selected
-                                  ? "border-bio-border-control bg-bio-surface-elevated"
-                                  : "border-transparent"
-                              }`}
-                            >
-                              <span className="flex min-w-0 flex-col gap-bio-2">
-                                <span className="truncate text-bio-sm font-medium text-bio-text">{m.id}</span>
-                                <span className="flex gap-bio-1" aria-hidden="true">
-                                  {m.vitals_bars.map((st, idx) => {
-                                    const k = m.has_telemetry ? toStatus(st) : "NODATA";
-                                    return (
-                                      <span
-                                        key={idx}
-                                        className={`h-1 w-bio-4 rounded-full ${
-                                          k === "CRITICAL"
-                                            ? "bg-bio-critical"
-                                            : k === "MEDIUM"
-                                            ? "bg-bio-warning"
-                                            : k === "NORMAL"
-                                            ? "bg-bio-text-muted"
-                                            : "bg-bio-border-strong"
-                                        }`}
-                                      />
-                                    );
-                                  })}
-                                </span>
-                                <span className="sr-only">
-                                  {m.has_telemetry
-                                    ? m.vitals_bars
-                                        .map((st, idx) => `${VITAL_LABELS[idx] ?? "Vital"}: ${toStatus(st).toLowerCase()}`)
-                                        .join(", ")
-                                    : "No readings logged"}
-                                </span>
-                              </span>
-                              <StatusBadge status={m.has_telemetry ? toStatus(m.status) : "NODATA"} />
-                            </button>
+                    {hasData ? (
+                      <>
+                        <ul className="flex flex-wrap gap-x-bio-4 gap-y-bio-2 text-bio-xs text-bio-text-secondary">
+                          <li className="inline-flex items-center gap-bio-2">
+                            <span className="h-0.5 w-bio-4 rounded-full bg-bio-primary" aria-hidden="true" />
+                            Logged readings
                           </li>
-                        );
-                      })}
-                    </ul>
-                  ) : (
-                    <EmptyState
-                      title="No crew vitals yet"
-                      body="Vitals appear here once a crew member logs a daily check-in."
+                          <li className="inline-flex items-center gap-bio-2">
+                            <span className="w-bio-4 border-t-2 border-dashed border-bio-text-muted" aria-hidden="true" />
+                            First reading
+                          </li>
+                          <li className="inline-flex items-center gap-bio-2">
+                            <span
+                              className="h-bio-3 w-bio-4 rounded-bio-sm border border-bio-nominal-border bg-bio-nominal-bg"
+                              aria-hidden="true"
+                            />
+                            Normal range
+                          </li>
+                        </ul>
+
+                        <div className="flex gap-bio-3">
+                          <div
+                            className="flex h-48 flex-col justify-between py-5 text-right font-mono text-bio-xs text-bio-text-muted"
+                            aria-hidden="true"
+                          >
+                            {chartBounds.labels.map((lbl, idx) => (
+                              <span key={idx}>{lbl}</span>
+                            ))}
+                          </div>
+                          <div className="flex min-w-0 flex-1 flex-col gap-bio-2">
+                            <svg
+                              role="img"
+                              aria-label={`${chartMetricLabel} over the last ${chartValues.length} readings. Latest: ${chartValues[chartValues.length - 1]}.`}
+                              className="block h-48 w-full"
+                              viewBox="0 0 600 200"
+                              preserveAspectRatio="none"
+                            >
+                              {[0, 1, 2, 3, 4].map((i) => (
+                                <line
+                                  key={i}
+                                  x1="0"
+                                  x2="600"
+                                  y1={20 + i * 40}
+                                  y2={20 + i * 40}
+                                  className="stroke-bio-border-subtle"
+                                  strokeWidth="1"
+                                  vectorEffect="non-scaling-stroke"
+                                />
+                              ))}
+                              <rect
+                                x="0"
+                                width="600"
+                                y={chartBand.y}
+                                height={chartBand.height}
+                                className="fill-bio-nominal-bg"
+                              />
+                              <path
+                                d={baselinePath}
+                                fill="none"
+                                className="stroke-bio-text-muted"
+                                strokeWidth="1.5"
+                                strokeDasharray="5 5"
+                                vectorEffect="non-scaling-stroke"
+                              />
+                              <path
+                                d={primaryPath}
+                                fill="none"
+                                className="stroke-bio-primary"
+                                strokeWidth="2.5"
+                                strokeLinejoin="round"
+                                strokeLinecap="round"
+                                vectorEffect="non-scaling-stroke"
+                              />
+                            </svg>
+                            <div className="flex justify-between font-mono text-bio-xs text-bio-text-muted">
+                              {chartHistory.map((h, i) => (
+                                <span key={i}>Sol {h.mission_day}</span>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <EmptyState
+                        className="min-h-48"
+                        title="No readings logged yet"
+                        body="Log a daily check-in to start the trend line and the vital forecast."
+                        action={
+                          <Button onClick={() => setActiveScreen("daily-checkin")}>Open daily check-in</Button>
+                        }
+                      />
+                    )}
+                  </Panel>
+
+                  <Panel aria-labelledby="system-title" className="flex-1">
+                    <PanelHeader
+                      titleId="system-title"
+                      title="Out-of-range readings by system"
+                      description="How many logged readings fell outside expected limits, per body system."
                     />
-                  )}
-                </Panel>
+                    <div className="flex flex-col gap-bio-2">
+                      <div className="flex h-44 items-end gap-bio-2 border-b border-bio-border-strong">
+                        {systemAlertCounts.map((item) => (
+                          <div
+                            key={item.label}
+                            className="flex flex-1 flex-col items-center justify-end gap-bio-1"
+                          >
+                            <span className="font-mono text-bio-xs text-bio-text-secondary">{item.count}</span>
+                            <div
+                              className="w-bio-5 rounded-t-bio-sm bg-gradient-to-t from-bio-primary to-bio-accent"
+                              style={{
+                                height: `${
+                                  item.count === 0 ? 0 : Math.max(8, Math.round((item.count / maxSystemCount) * 136))
+                                }px`,
+                              }}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      <div className="flex gap-bio-2 text-center text-bio-xs text-bio-text-secondary">
+                        {systemAlertCounts.map((item) => (
+                          <span key={item.label} className="flex-1 truncate">
+                            {item.label}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </Panel>
+                </div>
+
+                {/* CENTER STAGE: Rotating 3D Holographic Body Model + Biometric Envelope Bar Chart */}
+                <div className="order-1 flex flex-col gap-bio-4 xl:order-2 xl:h-full">
+                  <HologramModel3D
+                    astronautId={latestMetrics?.astronaut_id || selectedAstroId || leadProfile?.callsign}
+                    missionDay={latestMetrics?.mission_day}
+                    status={overallBodyStatus}
+                    heartRate={latestMetrics?.heart_rate ?? null}
+                    spo2={latestMetrics?.spo2 ?? null}
+                    sleepHours={latestMetrics?.sleep_hours ?? null}
+                    radiationMsv={latestMetrics?.radiation_msv ?? null}
+                  />
+
+                  <Panel aria-labelledby="envelope-title" className="flex-1">
+                    <PanelHeader
+                      titleId="envelope-title"
+                      title="Biometric envelope"
+                      description="Latest telemetry levels relative to mission safety limits."
+                    />
+                    <div className="flex flex-col gap-bio-3">
+                      {[
+                        {
+                          label: "Heart rate",
+                          pct: latestMetrics ? Math.min(100, Math.max(8, (Number(latestMetrics.heart_rate) / 140) * 100)) : 0,
+                          readout: latestMetrics ? `${Math.round(latestMetrics.heart_rate)} bpm` : "—",
+                          st: vitalStatus(0),
+                        },
+                        {
+                          label: "SpO₂ saturation",
+                          pct: latestMetrics ? Math.min(100, Math.max(8, Number(latestMetrics.spo2))) : 0,
+                          readout: latestMetrics ? `${Number(latestMetrics.spo2).toFixed(1)}%` : "—",
+                          st: vitalStatus(1),
+                        },
+                        {
+                          label: "Sleep cycle",
+                          pct: latestMetrics ? Math.min(100, Math.max(8, (Number(latestMetrics.sleep_hours) / 10) * 100)) : 0,
+                          readout: latestMetrics ? `${Number(latestMetrics.sleep_hours).toFixed(1)} h` : "—",
+                          st: vitalStatus(2),
+                        },
+                        {
+                          label: "Core temp",
+                          pct: latestMetrics
+                            ? Math.min(100, Math.max(8, ((Number(latestMetrics.core_temp_c ?? 36.8) - 35) / 4) * 100))
+                            : 0,
+                          readout: latestMetrics ? `${Number(latestMetrics.core_temp_c ?? 36.8).toFixed(1)} °C` : "—",
+                          st: vitalStatus(3),
+                        },
+                        {
+                          label: "Radiation load",
+                          pct: latestMetrics ? Math.min(100, Math.max(6, (Number(latestMetrics.radiation_msv) / 2.5) * 100)) : 0,
+                          readout: latestMetrics ? `${Number(latestMetrics.radiation_msv).toFixed(2)} mSv` : "—",
+                          st: vitalStatus(4),
+                        },
+                      ].map((bar) => (
+                        <div key={bar.label} className="flex flex-col gap-bio-1">
+                          <div className="flex items-center justify-between text-bio-xs">
+                            <span className="text-bio-text-secondary">{bar.label}</span>
+                            <span className="font-mono font-medium text-bio-text">{bar.readout}</span>
+                          </div>
+                          <div className="h-2 w-full overflow-hidden rounded-full bg-bio-surface-elevated">
+                            <div
+                              className={`h-full rounded-full transition-all duration-300 ${
+                                bar.st === "CRITICAL"
+                                  ? "bg-bio-critical-bold"
+                                  : bar.st === "MEDIUM"
+                                  ? "bg-bio-warning"
+                                  : "bg-gradient-to-r from-bio-primary to-bio-accent"
+                              }`}
+                              style={{ width: `${bar.pct}%` }}
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </Panel>
+                </div>
+
+                {/* RIGHT WING: Sleep/Radiation Metrics + Activity Donut + Crew Vitals */}
+                <div className="order-3 flex flex-col gap-bio-4 xl:h-full">
+                  <div className="grid grid-cols-1 gap-bio-4 min-[520px]:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+                    <MetricCard
+                      label="Sleep"
+                      value={latestMetrics ? Number(latestMetrics.sleep_hours).toFixed(1) : null}
+                      unit="h"
+                      status={vitalStatus(2)}
+                      delta={deltaLabel(latestMetrics?.sleep_hours, prevMetrics?.sleep_hours)}
+                      range={VITAL_RANGES.sleep_hours}
+                    />
+                    <MetricCard
+                      label="Radiation dose today"
+                      value={latestMetrics ? Number(latestMetrics.radiation_msv).toFixed(2) : null}
+                      unit="mSv"
+                      status={vitalStatus(4)}
+                      delta={deltaLabel(latestMetrics?.radiation_msv, prevMetrics?.radiation_msv)}
+                      range={VITAL_RANGES.radiation_msv}
+                    />
+                  </div>
+
+                  <Panel aria-labelledby="activity-title">
+                    <PanelHeader
+                      titleId="activity-title"
+                      title="Crew time by activity"
+                      description="Share of a 24-hour sol."
+                    />
+                    <div className="flex flex-wrap items-center gap-bio-5">
+                      <svg
+                        className="h-32 w-32 shrink-0"
+                        viewBox="0 0 100 100"
+                        role="img"
+                        aria-label="Donut chart of crew time by activity. Values are listed beside it."
+                      >
+                        <circle cx="50" cy="50" r="40" fill="none" className="stroke-bio-border-strong" strokeWidth="14" />
+                        {hasData &&
+                          activitySegments.map((seg) => (
+                            <circle
+                              key={seg.label}
+                              cx="50"
+                              cy="50"
+                              r="40"
+                              fill="none"
+                              className={seg.stroke}
+                              strokeWidth="14"
+                              strokeDasharray={`${seg.len} ${DONUT_CIRCUMFERENCE - seg.len}`}
+                              strokeDashoffset={-seg.offset}
+                              transform="rotate(-90 50 50)"
+                            />
+                          ))}
+                      </svg>
+                      <ul className="flex min-w-36 flex-1 flex-col gap-bio-2 text-bio-sm">
+                        {activitySegments.map((seg) => (
+                          <li key={seg.label} className="flex items-center justify-between gap-bio-3">
+                            <span className="inline-flex items-center gap-bio-2 text-bio-text-secondary">
+                              <span className={`h-2 w-2 rounded-full ${seg.dot}`} aria-hidden="true" />
+                              {seg.label}
+                            </span>
+                            <span className="font-mono text-bio-text">{hasData ? `${seg.pct}%` : "—"}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </Panel>
+
+                  <Panel aria-labelledby="crew-vitals-title" className="flex-1">
+                    <PanelHeader
+                      titleId="crew-vitals-title"
+                      title="Crew vitals"
+                      description="Select a crew member to filter this page. Bars show heart rate, SpO₂, sleep, temperature and dose."
+                    />
+                    {crew.length > 0 ? (
+                      <ul className="flex flex-col gap-bio-1">
+                        {crew.map((m) => {
+                          const selected = m.id === selectedAstroId;
+                          return (
+                            <li key={m.id}>
+                              <button
+                                type="button"
+                                aria-pressed={selected}
+                                onClick={() => setSelectedAstroId(selected ? "" : m.id)}
+                                className={`bio-focus flex w-full items-center justify-between gap-bio-3 rounded-bio-md border px-bio-3 py-bio-2 text-left transition-colors duration-150 hover:bg-bio-surface-hover active:bg-bio-surface-active ${
+                                  selected
+                                    ? "border-bio-border-control bg-bio-surface-elevated"
+                                    : "border-transparent"
+                                }`}
+                              >
+                                <span className="flex min-w-0 flex-col gap-bio-2">
+                                  <span className="truncate text-bio-sm font-medium text-bio-text">{m.id}</span>
+                                  <span className="flex gap-bio-1" aria-hidden="true">
+                                    {m.vitals_bars.map((st, idx) => {
+                                      const k = m.has_telemetry ? toStatus(st) : "NODATA";
+                                      return (
+                                        <span
+                                          key={idx}
+                                          className={`h-1 w-bio-4 rounded-full ${
+                                            k === "CRITICAL"
+                                              ? "bg-bio-critical"
+                                              : k === "MEDIUM"
+                                              ? "bg-bio-warning"
+                                              : k === "NORMAL"
+                                              ? "bg-bio-text-muted"
+                                              : "bg-bio-border-strong"
+                                          }`}
+                                        />
+                                      );
+                                    })}
+                                  </span>
+                                  <span className="sr-only">
+                                    {m.has_telemetry
+                                      ? m.vitals_bars
+                                          .map((st, idx) => `${VITAL_LABELS[idx] ?? "Vital"}: ${toStatus(st).toLowerCase()}`)
+                                          .join(", ")
+                                      : "No readings logged"}
+                                  </span>
+                                </span>
+                                <StatusBadge status={m.has_telemetry ? toStatus(m.status) : "NODATA"} />
+                              </button>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    ) : (
+                      <EmptyState
+                        title="No crew vitals yet"
+                        body="Vitals appear here once a crew member logs a daily check-in."
+                      />
+                    )}
+                  </Panel>
+                </div>
               </div>
 
-              {/* Vital forecast */}
+              {/* Vital forecast (full-width below the 3-column biometric stage) */}
               <Panel aria-labelledby="forecast-title" aria-busy={isLoadingForecast}>
                 <PanelHeader
                   titleId="forecast-title"
@@ -1924,477 +2065,665 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                   </div>
                 )}
               </Panel>
-
-              {/* History summaries */}
-              <div className="grid gap-bio-4 xl:grid-cols-2">
-                <Panel aria-labelledby="system-title">
-                  <PanelHeader
-                    titleId="system-title"
-                    title="Out-of-range readings by system"
-                    description="How many logged readings fell outside expected limits, per body system."
-                  />
-                  <div className="flex flex-col gap-bio-2">
-                    <div className="flex h-52 items-end gap-bio-3 border-b border-bio-border-strong">
-                      {systemAlertCounts.map((item) => (
-                        <div
-                          key={item.label}
-                          className="flex flex-1 flex-col items-center justify-end gap-bio-1"
-                        >
-                          <span className="font-mono text-bio-xs text-bio-text-secondary">{item.count}</span>
-                          <div
-                            className="w-bio-6 rounded-t-bio-sm bg-bio-accent"
-                            style={{
-                              height: `${
-                                item.count === 0 ? 0 : Math.max(8, Math.round((item.count / maxSystemCount) * 160))
-                              }px`,
-                            }}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                    <div className="flex gap-bio-3 text-center text-bio-xs text-bio-text-secondary">
-                      {systemAlertCounts.map((item) => (
-                        <span key={item.label} className="flex-1">
-                          {item.label}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                </Panel>
-
-                <Panel aria-labelledby="activity-title">
-                  <PanelHeader
-                    titleId="activity-title"
-                    title="Crew time by activity"
-                    description="Share of a 24-hour sol."
-                  />
-                  <div className="flex flex-wrap items-center gap-bio-6">
-                    <svg
-                      className="h-36 w-36 shrink-0"
-                      viewBox="0 0 100 100"
-                      role="img"
-                      aria-label="Donut chart of crew time by activity. Values are listed beside it."
-                    >
-                      <circle cx="50" cy="50" r="40" fill="none" className="stroke-bio-border-strong" strokeWidth="14" />
-                      {hasData &&
-                        activitySegments.map((seg) => (
-                          <circle
-                            key={seg.label}
-                            cx="50"
-                            cy="50"
-                            r="40"
-                            fill="none"
-                            className={seg.stroke}
-                            strokeWidth="14"
-                            strokeDasharray={`${seg.len} ${DONUT_CIRCUMFERENCE - seg.len}`}
-                            strokeDashoffset={-seg.offset}
-                            transform="rotate(-90 50 50)"
-                          />
-                        ))}
-                    </svg>
-                    <ul className="flex min-w-40 flex-1 flex-col gap-bio-3 text-bio-sm">
-                      {activitySegments.map((seg) => (
-                        <li key={seg.label} className="flex items-center justify-between gap-bio-3">
-                          <span className="inline-flex items-center gap-bio-2 text-bio-text-secondary">
-                            <span className={`h-2 w-2 rounded-full ${seg.dot}`} aria-hidden="true" />
-                            {seg.label}
-                          </span>
-                          <span className="font-mono text-bio-text">{hasData ? `${seg.pct}%` : "—"}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                </Panel>
-              </div>
             </div>
           )}
 
           {/* =================================================================
-              SCREEN 2: DAILY CHECK-IN (Unified Single Form, No Tabs)
+              SCREEN 2: DAILY CHECK-IN (All 44 Classifier Metrics + Holographic HUD Design)
           ================================================================= */}
           {activeScreen === "daily-checkin" && (
             <section
               style={{
+                position: "relative",
                 display: "flex",
                 flexDirection: "column",
-                gap: "24px",
+                gap: "22px",
                 padding: "24px",
                 borderRadius: "16px",
-                background: "#282828",
+                background: "#0F131C",
+                border: "1px solid #232B3B",
               }}
             >
-              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
-                <div>
-                  <h1 style={{ margin: 0, fontSize: "16px", fontWeight: 600 }}>
-                    Daily Crew Check-in &amp; Biometric Log
-                  </h1>
-                  <p style={{ margin: "4px 0 0", fontSize: "12px", color: "#A3A3A3" }}>
-                    Enter daily check-in parameters on this screen or launch the guided ISS multi-step modal.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsModalCheckInOpen(true)}
+              {/* Animated ASTRO Holographic HUD Loader Overlay during submission */}
+              {isSubmittingCheckIn && (
+                <div
+                  role="status"
+                  aria-live="assertive"
                   style={{
-                    height: "36px",
-                    padding: "0 16px",
-                    borderRadius: "8px",
-                    border: "none",
-                    background: "#7DD3FC",
-                    color: "#1C1C1C",
-                    fontSize: "12px",
-                    fontWeight: 600,
-                    cursor: "pointer",
-                    display: "inline-flex",
+                    position: "fixed",
+                    inset: 0,
+                    zIndex: 9998,
+                    display: "flex",
+                    flexDirection: "column",
                     alignItems: "center",
-                    gap: "6px",
+                    justifyContent: "center",
+                    gap: "20px",
+                    background: "rgba(8, 11, 16, 0.86)",
+                    backdropFilter: "blur(8px)",
                   }}
                 >
-                  📋 Launch Guided ISS 6-Step Modal
-                </button>
+                  <div style={{ position: "relative", width: "260px", height: "260px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    {/* Outer glowing telemetry arc ring */}
+                    <svg
+                      width="260"
+                      height="260"
+                      viewBox="0 0 260 260"
+                      style={{ position: "absolute", inset: 0, animation: "astroSpinCW 9s linear infinite" }}
+                      aria-hidden="true"
+                    >
+                      <circle cx="130" cy="130" r="122" fill="none" stroke="rgba(45, 212, 191, 0.22)" strokeWidth="1.5" />
+                      <circle
+                        cx="130"
+                        cy="130"
+                        r="122"
+                        fill="none"
+                        stroke="#2DD4BF"
+                        strokeWidth="4"
+                        strokeDasharray="68 95 28 110"
+                        strokeLinecap="round"
+                      />
+                      <circle
+                        cx="130"
+                        cy="130"
+                        r="112"
+                        fill="none"
+                        stroke="rgba(94, 234, 212, 0.45)"
+                        strokeWidth="2"
+                        strokeDasharray="4 10"
+                      />
+                    </svg>
+
+                    {/* Middle counter-rotating tick / capsule gauge ring */}
+                    <svg
+                      width="210"
+                      height="210"
+                      viewBox="0 0 210 210"
+                      style={{ position: "absolute", animation: "astroSpinCCW 7s linear infinite" }}
+                      aria-hidden="true"
+                    >
+                      <circle
+                        cx="105"
+                        cy="105"
+                        r="94"
+                        fill="none"
+                        stroke="rgba(45, 212, 191, 0.55)"
+                        strokeWidth="7"
+                        strokeDasharray="3 7"
+                      />
+                      <circle
+                        cx="105"
+                        cy="105"
+                        r="82"
+                        fill="none"
+                        stroke="#5EEAD4"
+                        strokeWidth="2"
+                        strokeDasharray="45 35 15 45"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+
+                    {/* Inner pulsing core ring */}
+                    <svg
+                      width="148"
+                      height="148"
+                      viewBox="0 0 148 148"
+                      style={{ position: "absolute", animation: "astroSpinCW 4.5s linear infinite, astroPulseGlow 2s ease-in-out infinite" }}
+                      aria-hidden="true"
+                    >
+                      <circle cx="74" cy="74" r="66" fill="rgba(45, 212, 191, 0.05)" stroke="rgba(45, 212, 191, 0.3)" strokeWidth="1" />
+                      <circle
+                        cx="74"
+                        cy="74"
+                        r="62"
+                        fill="none"
+                        stroke="#2DD4BF"
+                        strokeWidth="4.5"
+                        strokeDasharray="90 35 45 25"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+
+                    {/* Center Label: ASTRO */}
+                    <div
+                      style={{
+                        position: "relative",
+                        zIndex: 2,
+                        display: "flex",
+                        flexDirection: "column",
+                        alignItems: "center",
+                        gap: "2px",
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontFamily: "'JetBrains Mono', monospace",
+                          fontSize: "20px",
+                          fontWeight: 700,
+                          letterSpacing: "0.28em",
+                          paddingLeft: "0.28em",
+                          color: "#F1F5F9",
+                          textShadow: "0 0 14px rgba(45, 212, 191, 0.85)",
+                        }}
+                      >
+                        ASTRO
+                      </span>
+                    </div>
+                  </div>
+                  <div
+                    style={{
+                      fontFamily: "'JetBrains Mono', monospace",
+                      fontSize: "12px",
+                      letterSpacing: "0.14em",
+                      color: "#5EEAD4",
+                      textTransform: "uppercase",
+                    }}
+                  >
+                    Classifying Biometrics &amp; Updating Telemetry...
+                  </div>
+                </div>
+              )}
+
+              {/* Header */}
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "12px", borderBottom: "1px solid rgba(45, 212, 191, 0.16)", paddingBottom: "14px" }}>
+                <div>
+                  <h1 style={{ margin: 0, fontSize: "16px", fontWeight: 600, color: "#F1F5F9" }}>
+                    Daily Crew Check-in
+                  </h1>
+                  <p style={{ margin: "4px 0 0", fontSize: "12px", color: "#94A3B8" }}>
+                    Complete all 5 operational panels below to run the ML health classifier and update station telemetry.
+                  </p>
+                </div>
+                <span
+                  style={{
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: "11px",
+                    padding: "4px 10px",
+                    borderRadius: "999px",
+                    border: "1px solid rgba(45, 212, 191, 0.35)",
+                    background: "rgba(45, 212, 191, 0.1)",
+                    color: "#2DD4BF",
+                  }}
+                >
+                  44-FEATURE CLASSIFIER READY
+                </span>
               </div>
 
               <form
                 onSubmit={handleCheckInSubmit}
                 style={{ display: "flex", flexDirection: "column", gap: "20px" }}
               >
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-                    gap: "16px",
-                  }}
-                >
-                  <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                    <span style={{ fontSize: "12px", color: "#A3A3A3" }}>Crew Member ID / Name</span>
-                    <input
-                      type="text"
-                      required
-                      value={checkInForm.astronaut_id}
-                      onChange={(e) =>
-                        setCheckInForm({ ...checkInForm, astronaut_id: e.target.value })
-                      }
-                      style={{
-                        height: "38px",
-                        padding: "0 12px",
-                        borderRadius: "8px",
-                        border: "1px solid #333333",
-                        background: "#1C1C1C",
-                        color: "#FFFFFF",
-                      }}
-                    />
-                  </label>
+                {/* SECTION 1: Identity & Physiological Vitals */}
+                <div style={{ padding: "16px", borderRadius: "12px", background: "#131720", border: "1px solid #232B3B", display: "flex", flexDirection: "column", gap: "14px" }}>
+                  <div style={{ fontSize: "11px", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#2DD4BF", fontFamily: "'JetBrains Mono', monospace" }}>
+                    01 · Identity &amp; Physiological Vitals
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(185px, 1fr))", gap: "14px" }}>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>Crew Member ID / Callsign</span>
+                      <input
+                        type="text"
+                        required
+                        value={checkInForm.astronaut_id}
+                        onChange={(e) => setCheckInForm({ ...checkInForm, astronaut_id: e.target.value })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      />
+                    </label>
 
-                  <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                    <span style={{ fontSize: "12px", color: "#A3A3A3" }}>Mission Day (Sol)</span>
-                    <input
-                      type="number"
-                      min={1}
-                      required
-                      value={checkInForm.mission_day}
-                      onChange={(e) =>
-                        setCheckInForm({
-                          ...checkInForm,
-                          mission_day: parseInt(e.target.value || "1", 10),
-                        })
-                      }
-                      style={{
-                        height: "38px",
-                        padding: "0 12px",
-                        borderRadius: "8px",
-                        border: "1px solid #333333",
-                        background: "#1C1C1C",
-                        color: "#FFFFFF",
-                      }}
-                    />
-                  </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>Mission Day (Sol)</span>
+                      <input
+                        type="number"
+                        min={1}
+                        required
+                        value={checkInForm.mission_day}
+                        onChange={(e) => setCheckInForm({ ...checkInForm, mission_day: parseInt(e.target.value || "1", 10) })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      />
+                    </label>
 
-                  <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                    <span style={{ fontSize: "12px", color: "#A3A3A3" }}>Heart Rate (BPM)</span>
-                    <input
-                      type="number"
-                      step="1"
-                      min={30}
-                      max={220}
-                      required
-                      value={checkInForm.heart_rate}
-                      onChange={(e) =>
-                        setCheckInForm({
-                          ...checkInForm,
-                          heart_rate: parseFloat(e.target.value || "0"),
-                        })
-                      }
-                      style={{
-                        height: "38px",
-                        padding: "0 12px",
-                        borderRadius: "8px",
-                        border: "1px solid #333333",
-                        background: "#1C1C1C",
-                        color: "#FFFFFF",
-                      }}
-                    />
-                  </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>Heart Rate (BPM)</span>
+                      <input
+                        type="number"
+                        step="1"
+                        min={30}
+                        max={240}
+                        required
+                        value={checkInForm.heart_rate}
+                        onChange={(e) => setCheckInForm({ ...checkInForm, heart_rate: parseFloat(e.target.value || "0") })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      />
+                    </label>
 
-                  <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                    <span style={{ fontSize: "12px", color: "#A3A3A3" }}>SpO₂ (%)</span>
-                    <input
-                      type="number"
-                      step="0.1"
-                      min={50}
-                      max={100}
-                      required
-                      value={checkInForm.spo2}
-                      onChange={(e) =>
-                        setCheckInForm({
-                          ...checkInForm,
-                          spo2: parseFloat(e.target.value || "0"),
-                        })
-                      }
-                      style={{
-                        height: "38px",
-                        padding: "0 12px",
-                        borderRadius: "8px",
-                        border: "1px solid #333333",
-                        background: "#1C1C1C",
-                        color: "#FFFFFF",
-                      }}
-                    />
-                  </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>SpO₂ (%)</span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        min={50}
+                        max={100}
+                        required
+                        value={checkInForm.spo2}
+                        onChange={(e) => setCheckInForm({ ...checkInForm, spo2: parseFloat(e.target.value || "0") })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      />
+                    </label>
 
-                  <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                    <span style={{ fontSize: "12px", color: "#A3A3A3" }}>Systolic BP (mmHg)</span>
-                    <input
-                      type="number"
-                      min={60}
-                      max={240}
-                      required
-                      value={checkInForm.bp_sys}
-                      onChange={(e) =>
-                        setCheckInForm({
-                          ...checkInForm,
-                          bp_sys: parseFloat(e.target.value || "0"),
-                        })
-                      }
-                      style={{
-                        height: "38px",
-                        padding: "0 12px",
-                        borderRadius: "8px",
-                        border: "1px solid #333333",
-                        background: "#1C1C1C",
-                        color: "#FFFFFF",
-                      }}
-                    />
-                  </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>Systolic BP (mmHg)</span>
+                      <input
+                        type="number"
+                        min={60}
+                        max={250}
+                        required
+                        value={checkInForm.bp_sys}
+                        onChange={(e) => setCheckInForm({ ...checkInForm, bp_sys: parseFloat(e.target.value || "0") })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      />
+                    </label>
 
-                  <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                    <span style={{ fontSize: "12px", color: "#A3A3A3" }}>Diastolic BP (mmHg)</span>
-                    <input
-                      type="number"
-                      min={40}
-                      max={160}
-                      required
-                      value={checkInForm.bp_dia}
-                      onChange={(e) =>
-                        setCheckInForm({
-                          ...checkInForm,
-                          bp_dia: parseFloat(e.target.value || "0"),
-                        })
-                      }
-                      style={{
-                        height: "38px",
-                        padding: "0 12px",
-                        borderRadius: "8px",
-                        border: "1px solid #333333",
-                        background: "#1C1C1C",
-                        color: "#FFFFFF",
-                      }}
-                    />
-                  </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>Diastolic BP (mmHg)</span>
+                      <input
+                        type="number"
+                        min={40}
+                        max={160}
+                        required
+                        value={checkInForm.bp_dia}
+                        onChange={(e) => setCheckInForm({ ...checkInForm, bp_dia: parseFloat(e.target.value || "0") })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      />
+                    </label>
 
-                  <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                    <span style={{ fontSize: "12px", color: "#A3A3A3" }}>
-                      Sleep Duration (hours)
-                    </span>
-                    <input
-                      type="number"
-                      step="0.1"
-                      min={0}
-                      max={24}
-                      required
-                      value={checkInForm.sleep_hours}
-                      onChange={(e) =>
-                        setCheckInForm({
-                          ...checkInForm,
-                          sleep_hours: parseFloat(e.target.value || "0"),
-                        })
-                      }
-                      style={{
-                        height: "38px",
-                        padding: "0 12px",
-                        borderRadius: "8px",
-                        border: "1px solid #333333",
-                        background: "#1C1C1C",
-                        color: "#FFFFFF",
-                      }}
-                    />
-                  </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>Core Temperature (°C)</span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        min={34}
+                        max={42}
+                        required
+                        value={checkInForm.core_temp_c}
+                        onChange={(e) => setCheckInForm({ ...checkInForm, core_temp_c: parseFloat(e.target.value || "36.8") })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      />
+                    </label>
 
-                  <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                    <span style={{ fontSize: "12px", color: "#A3A3A3" }}>
-                      Radiation Dose Today (mSv)
-                    </span>
-                    <input
-                      type="number"
-                      step="0.05"
-                      min={0}
-                      required
-                      value={checkInForm.radiation_msv}
-                      onChange={(e) =>
-                        setCheckInForm({
-                          ...checkInForm,
-                          radiation_msv: parseFloat(e.target.value || "0"),
-                        })
-                      }
-                      style={{
-                        height: "38px",
-                        padding: "0 12px",
-                        borderRadius: "8px",
-                        border: "1px solid #333333",
-                        background: "#1C1C1C",
-                        color: "#FFFFFF",
-                      }}
-                    />
-                  </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>HRV RMSSD (ms)</span>
+                      <input
+                        type="number"
+                        step="1"
+                        min={5}
+                        max={200}
+                        required
+                        value={checkInForm.hrv_rmssd}
+                        onChange={(e) => setCheckInForm({ ...checkInForm, hrv_rmssd: parseFloat(e.target.value || "48") })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      />
+                    </label>
 
-                  <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                    <span style={{ fontSize: "12px", color: "#A3A3A3" }}>
-                      Core Temperature (°C)
-                    </span>
-                    <input
-                      type="number"
-                      step="0.1"
-                      min={34}
-                      max={42}
-                      value={checkInForm.core_temp_c}
-                      onChange={(e) =>
-                        setCheckInForm({
-                          ...checkInForm,
-                          core_temp_c: parseFloat(e.target.value || "36.8"),
-                        })
-                      }
-                      style={{
-                        height: "38px",
-                        padding: "0 12px",
-                        borderRadius: "8px",
-                        border: "1px solid #333333",
-                        background: "#1C1C1C",
-                        color: "#FFFFFF",
-                      }}
-                    />
-                  </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>Blood Glucose (mg/dL)</span>
+                      <input
+                        type="number"
+                        min={40}
+                        max={400}
+                        required
+                        value={checkInForm.blood_glucose}
+                        onChange={(e) => setCheckInForm({ ...checkInForm, blood_glucose: parseFloat(e.target.value || "92") })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      />
+                    </label>
 
-                  <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                    <span style={{ fontSize: "12px", color: "#A3A3A3" }}>HRV RMSSD (ms)</span>
-                    <input
-                      type="number"
-                      step="1"
-                      min={5}
-                      max={200}
-                      value={checkInForm.hrv_rmssd}
-                      onChange={(e) =>
-                        setCheckInForm({
-                          ...checkInForm,
-                          hrv_rmssd: parseFloat(e.target.value || "45"),
-                        })
-                      }
-                      style={{
-                        height: "38px",
-                        padding: "0 12px",
-                        borderRadius: "8px",
-                        border: "1px solid #333333",
-                        background: "#1C1C1C",
-                        color: "#FFFFFF",
-                      }}
-                    />
-                  </label>
-
-                  <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                    <span style={{ fontSize: "12px", color: "#A3A3A3" }}>
-                      Mood / Morale (1–5)
-                    </span>
-                    <select
-                      value={checkInForm.mood_score}
-                      onChange={(e) =>
-                        setCheckInForm({
-                          ...checkInForm,
-                          mood_score: parseInt(e.target.value, 10),
-                        })
-                      }
-                      style={{
-                        height: "38px",
-                        padding: "0 12px",
-                        borderRadius: "8px",
-                        border: "1px solid #333333",
-                        background: "#1C1C1C",
-                        color: "#FFFFFF",
-                      }}
-                    >
-                      <option value={5}>5 — Optimal</option>
-                      <option value={4}>4 — Good</option>
-                      <option value={3}>3 — Moderate fatigue</option>
-                      <option value={2}>2 — Distressed / Low</option>
-                      <option value={1}>1 — Severe exhaustion</option>
-                    </select>
-                  </label>
-
-                  <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                    <span style={{ fontSize: "12px", color: "#A3A3A3" }}>
-                      Blood Glucose (mg/dL)
-                    </span>
-                    <input
-                      type="number"
-                      min={40}
-                      max={400}
-                      value={checkInForm.blood_glucose}
-                      onChange={(e) =>
-                        setCheckInForm({
-                          ...checkInForm,
-                          blood_glucose: parseFloat(e.target.value || "92"),
-                        })
-                      }
-                      style={{
-                        height: "38px",
-                        padding: "0 12px",
-                        borderRadius: "8px",
-                        border: "1px solid #333333",
-                        background: "#1C1C1C",
-                        color: "#FFFFFF",
-                      }}
-                    />
-                  </label>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>Glucose Timing Context</span>
+                      <select
+                        value={checkInExtras.glucose_context}
+                        onChange={(e) => setCheckInExtras({ ...checkInExtras, glucose_context: e.target.value as GlucoseContext })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      >
+                        {GLUCOSE_CONTEXT.map((g) => (
+                          <option key={g.value} value={g.value}>{g.label}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
                 </div>
 
-                <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                  <span style={{ fontSize: "12px", color: "#A3A3A3" }}>
-                    Reported Symptoms &amp; Clinical Notes
-                  </span>
-                  <textarea
-                    rows={3}
-                    value={checkInForm.subjective_notes}
-                    onChange={(e) =>
-                      setCheckInForm({ ...checkInForm, subjective_notes: e.target.value })
-                    }
-                    placeholder="Optional notes (e.g., post-EVA fatigue, mild headache, vestibular sensation)..."
-                    style={{
-                      padding: "10px 12px",
-                      borderRadius: "8px",
-                      border: "1px solid #333333",
-                      background: "#1C1C1C",
-                      color: "#FFFFFF",
-                      resize: "vertical",
-                    }}
-                  />
-                </label>
+                {/* SECTION 2: Sleep & Psychological Wellbeing */}
+                <div style={{ padding: "16px", borderRadius: "12px", background: "#131720", border: "1px solid #232B3B", display: "flex", flexDirection: "column", gap: "14px" }}>
+                  <div style={{ fontSize: "11px", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#2DD4BF", fontFamily: "'JetBrains Mono', monospace" }}>
+                    02 · Sleep &amp; Psychological Wellbeing
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(185px, 1fr))", gap: "14px" }}>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>Bedtime (HH:MM)</span>
+                      <input
+                        type="time"
+                        required
+                        value={checkInExtras.bedtime}
+                        onChange={(e) => setCheckInExtras({ ...checkInExtras, bedtime: e.target.value })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      />
+                    </label>
+
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>Wake Time (HH:MM)</span>
+                      <input
+                        type="time"
+                        required
+                        value={checkInExtras.wake_time}
+                        onChange={(e) => setCheckInExtras({ ...checkInExtras, wake_time: e.target.value })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      />
+                    </label>
+
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>Sleep Duration (hours)</span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        min={0}
+                        max={24}
+                        required
+                        value={checkInForm.sleep_hours}
+                        onChange={(e) => setCheckInForm({ ...checkInForm, sleep_hours: parseFloat(e.target.value || "0") })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      />
+                    </label>
+
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>Sleep Quality (1–5)</span>
+                      <select
+                        value={checkInExtras.sleep_quality}
+                        onChange={(e) => setCheckInExtras({ ...checkInExtras, sleep_quality: parseInt(e.target.value, 10) })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      >
+                        {RATINGS.sleep_quality.options.map((o) => (
+                          <option key={o.value} value={o.value}>{o.value} — {o.label}</option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>Mood / Morale (1–5)</span>
+                      <select
+                        value={checkInForm.mood_score}
+                        onChange={(e) => setCheckInForm({ ...checkInForm, mood_score: parseInt(e.target.value, 10) })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      >
+                        {RATINGS.mood.options.map((o) => (
+                          <option key={o.value} value={o.value}>{o.value} — {o.label}</option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>Energy Level (1–5)</span>
+                      <select
+                        value={checkInExtras.energy_level}
+                        onChange={(e) => setCheckInExtras({ ...checkInExtras, energy_level: parseInt(e.target.value, 10) })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      >
+                        {RATINGS.energy.options.map((o) => (
+                          <option key={o.value} value={o.value}>{o.value} — {o.label}</option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>Stress / Calmness (1–5)</span>
+                      <select
+                        value={checkInExtras.stress_level}
+                        onChange={(e) => setCheckInExtras({ ...checkInExtras, stress_level: parseInt(e.target.value, 10) })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      >
+                        {RATINGS.stress.options.map((o) => (
+                          <option key={o.value} value={o.value}>{o.value} — {o.label}</option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label style={{ display: "flex", alignItems: "center", gap: "10px", marginTop: "22px", cursor: "pointer", padding: "0 10px", height: "38px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12" }}>
+                      <input
+                        type="checkbox"
+                        checked={checkInExtras.sleep_medication}
+                        onChange={(e) => setCheckInExtras({ ...checkInExtras, sleep_medication: e.target.checked })}
+                        style={{ accentColor: "#2DD4BF", width: "15px", height: "15px" }}
+                      />
+                      <span style={{ fontSize: "12px", color: "#F1F5F9" }}>Sleep Medication Used</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* SECTION 3: Exercise & Nutrition Countermeasures */}
+                <div style={{ padding: "16px", borderRadius: "12px", background: "#131720", border: "1px solid #232B3B", display: "flex", flexDirection: "column", gap: "14px" }}>
+                  <div style={{ fontSize: "11px", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#2DD4BF", fontFamily: "'JetBrains Mono', monospace" }}>
+                    03 · Exercise &amp; Nutrition Countermeasures
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(185px, 1fr))", gap: "14px" }}>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>Cardio Exercise (min)</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={600}
+                        required
+                        value={checkInExtras.cardio_minutes}
+                        onChange={(e) => setCheckInExtras({ ...checkInExtras, cardio_minutes: parseInt(e.target.value || "0", 10) })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      />
+                    </label>
+
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>Resistance / ARED (min)</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={600}
+                        required
+                        value={checkInExtras.resistance_minutes}
+                        onChange={(e) => setCheckInExtras({ ...checkInExtras, resistance_minutes: parseInt(e.target.value || "0", 10) })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      />
+                    </label>
+
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>Calories Eaten (kcal)</span>
+                      <input
+                        type="number"
+                        min={0}
+                        max={8000}
+                        required
+                        value={checkInExtras.calories_kcal}
+                        onChange={(e) => setCheckInExtras({ ...checkInExtras, calories_kcal: parseInt(e.target.value || "0", 10) })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      />
+                    </label>
+
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>Water Intake (L)</span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        min={0}
+                        max={10}
+                        required
+                        value={checkInExtras.water_liters}
+                        onChange={(e) => setCheckInExtras({ ...checkInExtras, water_liters: parseFloat(e.target.value || "0") })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      />
+                    </label>
+                  </div>
+
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
+                    {[
+                      { key: "breakfast" as const, label: "Breakfast" },
+                      { key: "lunch" as const, label: "Lunch" },
+                      { key: "dinner" as const, label: "Dinner" },
+                      { key: "vitamin_d_taken" as const, label: "Vitamin D Supplement" },
+                    ].map((item) => (
+                      <label
+                        key={item.key}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "8px",
+                          padding: "8px 12px",
+                          borderRadius: "8px",
+                          border: `1px solid ${checkInExtras[item.key] ? "rgba(45, 212, 191, 0.5)" : "#232B3B"}`,
+                          background: checkInExtras[item.key] ? "rgba(45, 212, 191, 0.1)" : "#0C0E12",
+                          cursor: "pointer",
+                          fontSize: "12px",
+                          color: "#F1F5F9",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checkInExtras[item.key]}
+                          onChange={(e) => setCheckInExtras({ ...checkInExtras, [item.key]: e.target.checked })}
+                          style={{ accentColor: "#2DD4BF", width: "14px", height: "14px" }}
+                        />
+                        {item.label}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* SECTION 4: Habitat & Radiation Environment */}
+                <div style={{ padding: "16px", borderRadius: "12px", background: "#131720", border: "1px solid #232B3B", display: "flex", flexDirection: "column", gap: "14px" }}>
+                  <div style={{ fontSize: "11px", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#2DD4BF", fontFamily: "'JetBrains Mono', monospace" }}>
+                    04 · Habitat &amp; Radiation Environment
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(185px, 1fr))", gap: "14px" }}>
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>Radiation Dose Today (mSv)</span>
+                      <input
+                        type="number"
+                        step="0.05"
+                        min={0}
+                        max={500}
+                        required
+                        value={checkInForm.radiation_msv}
+                        onChange={(e) => setCheckInForm({ ...checkInForm, radiation_msv: parseFloat(e.target.value || "0") })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      />
+                    </label>
+
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>Cabin Temperature (°C)</span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        min={0}
+                        max={50}
+                        required
+                        value={checkInExtras.cabin_temp_c}
+                        onChange={(e) => setCheckInExtras({ ...checkInExtras, cabin_temp_c: parseFloat(e.target.value || "22.5") })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      />
+                    </label>
+
+                    <label style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+                      <span style={{ fontSize: "12px", color: "#94A3B8" }}>Cabin Ambient CO₂ (mmHg)</span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        min={0}
+                        max={15}
+                        required
+                        value={checkInForm.cabin_co2_mmhg}
+                        onChange={(e) => setCheckInForm({ ...checkInForm, cabin_co2_mmhg: parseFloat(e.target.value || "2.6") })}
+                        style={{ height: "38px", padding: "0 12px", borderRadius: "8px", border: "1px solid #232B3B", background: "#0C0E12", color: "#F1F5F9" }}
+                      />
+                    </label>
+                  </div>
+
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "10px" }}>
+                    {[
+                      { key: "radiation_badge_worn" as const, label: "Dosimeter Badge Worn All Day" },
+                      { key: "ear_protection_used" as const, label: "Ear Protection Used in Noisy Areas" },
+                    ].map((item) => (
+                      <label
+                        key={item.key}
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: "8px",
+                          padding: "8px 12px",
+                          borderRadius: "8px",
+                          border: `1px solid ${checkInExtras[item.key] ? "rgba(45, 212, 191, 0.5)" : "#232B3B"}`,
+                          background: checkInExtras[item.key] ? "rgba(45, 212, 191, 0.1)" : "#0C0E12",
+                          cursor: "pointer",
+                          fontSize: "12px",
+                          color: "#F1F5F9",
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checkInExtras[item.key]}
+                          onChange={(e) => setCheckInExtras({ ...checkInExtras, [item.key]: e.target.checked })}
+                          style={{ accentColor: "#2DD4BF", width: "14px", height: "14px" }}
+                        />
+                        {item.label}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* SECTION 5: Spaceflight Symptoms Checklist (12 discrete indicators) */}
+                <div style={{ padding: "16px", borderRadius: "12px", background: "#131720", border: "1px solid #232B3B", display: "flex", flexDirection: "column", gap: "12px" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "8px" }}>
+                    <div style={{ fontSize: "11px", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#2DD4BF", fontFamily: "'JetBrains Mono', monospace" }}>
+                      05 · Spaceflight Symptoms Checklist ({checkInExtras.symptoms.length} selected)
+                    </div>
+                    {checkInExtras.symptoms.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setCheckInExtras({ ...checkInExtras, symptoms: [] })}
+                        style={{ background: "transparent", border: "none", color: "#94A3B8", fontSize: "11px", cursor: "pointer" }}
+                      >
+                        Clear symptoms
+                      </button>
+                    )}
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "8px" }}>
+                    {SYMPTOMS.map((sym) => {
+                      const active = checkInExtras.symptoms.includes(sym.key);
+                      return (
+                        <label
+                          key={sym.key}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "8px",
+                            padding: "8px 10px",
+                            borderRadius: "8px",
+                            border: `1px solid ${active ? "rgba(45, 212, 191, 0.55)" : "#232B3B"}`,
+                            background: active ? "rgba(45, 212, 191, 0.12)" : "#0C0E12",
+                            color: active ? "#5EEAD4" : "#94A3B8",
+                            fontSize: "12px",
+                            cursor: "pointer",
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={active}
+                            onChange={(e) => {
+                              const next = e.target.checked
+                                ? [...checkInExtras.symptoms, sym.key]
+                                : checkInExtras.symptoms.filter((s) => s !== sym.key);
+                              setCheckInExtras({ ...checkInExtras, symptoms: next });
+                            }}
+                            style={{ accentColor: "#2DD4BF", width: "14px", height: "14px" }}
+                          />
+                          {sym.label}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
 
                 <div
                   style={{
@@ -2402,24 +2731,26 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                     alignItems: "center",
                     justifyContent: "space-between",
                     gap: "16px",
+                    flexWrap: "wrap",
                   }}
                 >
-                  <span style={{ fontSize: "13px", color: "#7DD3FC" }}>{checkInFeedback}</span>
+                  <span style={{ fontSize: "13px", color: "#5EEAD4" }}>{checkInFeedback}</span>
                   <button
                     type="submit"
                     disabled={isSubmittingCheckIn}
                     style={{
-                      height: "40px",
-                      padding: "0 20px",
-                      borderRadius: "8px",
-                      border: "none",
-                      background: "#E3F5FF",
-                      color: "#1C1C1C",
-                      fontWeight: 600,
-                      cursor: "pointer",
+                      height: "42px",
+                      padding: "0 24px",
+                      borderRadius: "10px",
+                      border: "1px solid rgba(45, 212, 191, 0.4)",
+                      background: "#2DD4BF",
+                      color: "#061312",
+                      fontWeight: 700,
+                      fontSize: "13px",
+                      cursor: isSubmittingCheckIn ? "wait" : "pointer",
                     }}
                   >
-                    {isSubmittingCheckIn ? "Saving..." : "Submit Daily Check-in"}
+                    Submit Daily Check-in
                   </button>
                 </div>
               </form>
@@ -2460,25 +2791,27 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                 >
                   Active Crew Roster
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setCrewSubTab("lead-provision")}
-                  style={{
-                    border: "none",
-                    padding: "8px 16px",
-                    borderRadius: "8px",
-                    fontSize: "13px",
-                    fontWeight: 600,
-                    cursor: "pointer",
-                    background: crewSubTab === "lead-provision" ? "#333333" : "transparent",
-                    color: crewSubTab === "lead-provision" ? "#7DD3FC" : "#A3A3A3",
-                  }}
-                >
-                  Crew Lead Provisioning Portal {leadToken ? "🟢 (Lead Active)" : "🔒"}
-                </button>
+                {leadProfile?.is_lead && (
+                  <button
+                    type="button"
+                    onClick={() => setCrewSubTab("lead-provision")}
+                    style={{
+                      border: "none",
+                      padding: "8px 16px",
+                      borderRadius: "8px",
+                      fontSize: "13px",
+                      fontWeight: 600,
+                      cursor: "pointer",
+                      background: crewSubTab === "lead-provision" ? "#333333" : "transparent",
+                      color: crewSubTab === "lead-provision" ? "#7DD3FC" : "#A3A3A3",
+                    }}
+                  >
+                    Crew Lead Provisioning Portal 🟢 (Lead Active)
+                  </button>
+                )}
               </div>
 
-              {crewSubTab === "roster" ? (
+              {crewSubTab === "roster" || !leadProfile?.is_lead ? (
                 <>
                   <section
                     style={{
@@ -2844,11 +3177,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                         </div>
                         <button
                           type="button"
-                          onClick={() => {
-                            setLeadToken("");
-                            setLeadProfile(null);
-                            setLeadFeedback("Lead session ended.");
-                          }}
+                          onClick={handleSignOut}
                           style={{
                             padding: "6px 14px",
                             borderRadius: "8px",
@@ -3355,7 +3684,18 @@ Classifier results are ready. What is your clinical evaluation, what specific co
           RIGHT SIDEBAR (280px, var(--bio-surface), border var(--bio-border-subtle))
       ===================================================================== */}
       {showRightPanel && (
-        <div style={{ flex: "0 0 280px", borderLeft: "1px solid var(--bio-border-subtle)" }}>
+        <div
+          style={{
+            flex: "0 0 280px",
+            borderLeft: "1px solid var(--bio-border-subtle)",
+            position: "sticky",
+            top: 0,
+            height: "100vh",
+            overflowY: "auto",
+            alignSelf: "flex-start",
+            background: "var(--bio-surface)",
+          }}
+        >
           <aside
             aria-label="Alerts and crew"
             style={{
@@ -3419,14 +3759,10 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                       />
                       Daily Check-in Due
                     </span>
-                    <span style={{ fontSize: "10px", color: "#FDE68A", fontFamily: "'JetBrains Mono', monospace" }}>
-                      SOL {checkInForm.mission_day}
-                    </span>
                   </div>
                   <div style={{ fontSize: "11px", color: "#E5E5E5", lineHeight: "15px" }}>
                     <strong>{activeAstroId}</strong> has not logged today&apos;s daily biometric check-in yet.
                   </div>
-                  <div style={{ fontSize: "10px", color: "#A3A3A3" }}>{reminderWindowLabel}</div>
                   <div style={{ display: "flex", gap: "6px", marginTop: "2px" }}>
                     <button
                       type="button"
@@ -3461,98 +3797,6 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                       }}
                     >
                       Guided
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Automatic Floating Daily Check-in Notification Toast during the day */}
-              {isFloatingReminderVisible && (
-                <div
-                  role="alert"
-                  aria-live="polite"
-                  style={{
-                    position: "fixed",
-                    top: "72px",
-                    right: showRightPanel ? "300px" : "24px",
-                    zIndex: 75,
-                    width: "340px",
-                    padding: "14px 16px",
-                    borderRadius: "14px",
-                    background: "linear-gradient(135deg, #262015 0%, #1C1C1C 100%)",
-                    border: "1px solid #F59E0B",
-                    boxShadow: "0 14px 36px rgba(0, 0, 0, 0.65), 0 0 20px rgba(245, 158, 11, 0.2)",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "8px",
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                    <span style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", fontWeight: 700, color: "#FBBF24" }}>
-                      <span
-                        style={{
-                          width: "8px",
-                          height: "8px",
-                          borderRadius: "50%",
-                          background: "#F59E0B",
-                          boxShadow: "0 0 8px #F59E0B",
-                        }}
-                      />
-                      DAILY CHECK-IN REMINDER
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setReminderSnoozedUntil(Date.now() + 30 * 60 * 1000)}
-                      title="Snooze reminder for 30 minutes"
-                      style={{
-                        background: "transparent",
-                        border: "none",
-                        color: "#A3A3A3",
-                        fontSize: "11px",
-                        cursor: "pointer",
-                      }}
-                    >
-                      Snooze 30m ✕
-                    </button>
-                  </div>
-                  <div style={{ fontSize: "12px", color: "#FFFFFF", lineHeight: "17px" }}>
-                    Astronaut <strong>{activeAstroId}</strong> hasn&apos;t completed today&apos;s Sol {checkInForm.mission_day} health check-in.
-                  </div>
-                  <div style={{ fontSize: "11px", color: "#FDE68A" }}>{reminderWindowLabel}</div>
-                  <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
-                    <button
-                      type="button"
-                      onClick={() => setActiveScreen("daily-checkin")}
-                      style={{
-                        flex: 1,
-                        height: "32px",
-                        borderRadius: "8px",
-                        border: "none",
-                        background: "#F59E0B",
-                        color: "#1C1C1C",
-                        fontSize: "12px",
-                        fontWeight: 700,
-                        cursor: "pointer",
-                      }}
-                    >
-                      Start Check-in
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setIsModalCheckInOpen(true)}
-                      style={{
-                        height: "32px",
-                        padding: "0 12px",
-                        borderRadius: "8px",
-                        border: "1px solid rgba(125, 211, 252, 0.45)",
-                        background: "rgba(125, 211, 252, 0.12)",
-                        color: "#7DD3FC",
-                        fontSize: "12px",
-                        fontWeight: 600,
-                        cursor: "pointer",
-                      }}
-                    >
-                      Guided Sheet
                     </button>
                   </div>
                 </div>
@@ -3676,11 +3920,11 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                     </span>
                   </button>
                 ))
-              ) : (
+              ) : !(activeAlert && !activeAlert.acknowledged) ? (
                 <span style={{ padding: "4px", fontSize: "12px", color: "#6B6B6B" }}>
                   No alerts recorded
                 </span>
-              )}
+              ) : null}
             </section>
 
             {/* Crew Status List */}
@@ -3769,14 +4013,14 @@ Classifier results are ready. What is your clinical evaluation, what specific co
           style={{
             position: "fixed",
             bottom: "24px",
-            right: "24px",
+            right: showRightPanel ? "304px" : "24px",
             zIndex: 60,
             width: "52px",
             height: "52px",
             borderRadius: "50%",
-            background: "#E3F5FF",
-            color: "#1C1C1C",
-            border: "1px solid #333333",
+            background: "#131720",
+            color: "#5EEAD4",
+            border: "1px solid #232B3B",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
@@ -3785,10 +4029,10 @@ Classifier results are ready. What is your clinical evaluation, what specific co
           }}
         >
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <rect x="4" y="6" width="16" height="12" rx="4" stroke="#1C1C1C" strokeWidth="1.8" />
-            <path d="M12 3 V6" stroke="#1C1C1C" strokeWidth="1.8" strokeLinecap="round" />
-            <circle cx="9.5" cy="12" r="1.3" fill="#1C1C1C" />
-            <circle cx="14.5" cy="12" r="1.3" fill="#1C1C1C" />
+            <rect x="4" y="6" width="16" height="12" rx="4" stroke="#5EEAD4" strokeWidth="1.8" />
+            <path d="M12 3 V6" stroke="#5EEAD4" strokeWidth="1.8" strokeLinecap="round" />
+            <circle cx="9.5" cy="12" r="1.3" fill="#2DD4BF" />
+            <circle cx="14.5" cy="12" r="1.3" fill="#2DD4BF" />
           </svg>
         </button>
       )}
@@ -3800,17 +4044,17 @@ Classifier results are ready. What is your clinical evaluation, what specific co
           style={{
             position: "fixed",
             bottom: "24px",
-            right: "24px",
+            right: showRightPanel ? "304px" : "24px",
             zIndex: 60,
             width: isChatExpanded ? "min(840px, calc(100vw - 32px))" : "min(400px, calc(100vw - 32px))",
             height: isChatExpanded ? "min(720px, calc(100vh - 48px))" : "min(540px, calc(100vh - 48px))",
-            background: "#282828",
-            border: "1px solid #333333",
-            borderRadius: "16px",
+            background: "#131720",
+            border: "1px solid #232B3B",
+            borderRadius: "14px",
             display: "flex",
             flexDirection: "column",
             overflow: "hidden",
-            boxShadow: "0 16px 48px rgba(0,0,0,0.65)",
+            boxShadow: "0 16px 40px rgba(0,0,0,0.55)",
             transition: "width 0.18s ease, height 0.18s ease",
           }}
         >
@@ -3821,8 +4065,8 @@ Classifier results are ready. What is your clinical evaluation, what specific co
               alignItems: "center",
               justifyContent: "space-between",
               padding: "14px 16px",
-              background: "#1C1C1C",
-              borderBottom: "1px solid #333333",
+              background: "#0C0E12",
+              borderBottom: "1px solid #232B3B",
             }}
           >
             <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
@@ -3831,8 +4075,9 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                   width: "28px",
                   height: "28px",
                   borderRadius: "50%",
-                  background: "#E3F5FF",
-                  color: "#1C1C1C",
+                  background: "rgba(45, 212, 191, 0.12)",
+                  border: "1px solid rgba(45, 212, 191, 0.3)",
+                  color: "#5EEAD4",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
@@ -3845,19 +4090,19 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                     width="16"
                     height="12"
                     rx="4"
-                    stroke="#1C1C1C"
+                    stroke="currentColor"
                     strokeWidth="2"
                   />
-                  <circle cx="9.5" cy="12" r="1.4" fill="#1C1C1C" />
-                  <circle cx="14.5" cy="12" r="1.4" fill="#1C1C1C" />
+                  <circle cx="9.5" cy="12" r="1.4" fill="currentColor" />
+                  <circle cx="14.5" cy="12" r="1.4" fill="currentColor" />
                 </svg>
               </span>
               <div>
-                <div style={{ fontWeight: 600, fontSize: "14px", color: "#FFFFFF" }}>
+                <div style={{ fontWeight: 600, fontSize: "14px", color: "#F1F5F9" }}>
                   AstroDoc Flight Surgeon
                 </div>
-                <div style={{ fontSize: "11px", color: "#A3A3A3" }}>
-                  NASA RAG Clinical Assistant
+                <div style={{ fontSize: "11px", color: "#94A3B8" }}>
+                  NASA RAG Clinical Assistant{myChatAstroId ? ` · ${myChatAstroId}` : ""}
                 </div>
               </div>
             </div>
@@ -3945,7 +4190,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
               display: "flex",
               flexDirection: "column",
               gap: "12px",
-              background: "#1C1C1C",
+              background: "#0C0E12",
             }}
           >
             {chatHistory.length > 0 ? (
@@ -3957,15 +4202,16 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                     maxWidth: "85%",
                     padding: "10px 14px",
                     borderRadius: "12px",
-                    background: msg.role === "user" ? "#E3F5FF" : "#282828",
-                    color: msg.role === "user" ? "#1C1C1C" : "#FFFFFF",
+                    border: msg.role === "user" ? "1px solid rgba(45, 212, 191, 0.3)" : "1px solid #232B3B",
+                    background: msg.role === "user" ? "rgba(45, 212, 191, 0.12)" : "#131720",
+                    color: "#E2E8F0",
                     fontSize: "13px",
                     lineHeight: "19px",
                   }}
                 >
-                  <div style={{ whiteSpace: "pre-wrap" }}>{msg.content}</div>
+                  <div style={{ whiteSpace: "pre-wrap" }}>{renderFormattedChatText(msg.content)}</div>
                   {msg.citations && msg.citations.length > 0 && (
-                    <div style={{ marginTop: "6px", fontSize: "11px", color: "#A3A3A3" }}>
+                    <div style={{ marginTop: "6px", fontSize: "11px", color: "#94A3B8" }}>
                       Refs: {msg.citations.join(" · ")}
                     </div>
                   )}
@@ -3976,7 +4222,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                 style={{
                   margin: "auto",
                   textAlign: "center",
-                  color: "#6B6B6B",
+                  color: "#64748B",
                   fontSize: "13px",
                   maxWidth: "260px",
                 }}
@@ -3998,8 +4244,8 @@ Classifier results are ready. What is your clinical evaluation, what specific co
               display: "flex",
               gap: "8px",
               padding: "12px 16px",
-              background: "#282828",
-              borderTop: "1px solid #333333",
+              background: "#131720",
+              borderTop: "1px solid #232B3B",
             }}
           >
             <input
@@ -4012,9 +4258,9 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                 height: "38px",
                 padding: "0 12px",
                 borderRadius: "8px",
-                border: "1px solid #333333",
-                background: "#1C1C1C",
-                color: "#FFFFFF",
+                border: "1px solid #232B3B",
+                background: "#0C0E12",
+                color: "#F1F5F9",
                 fontSize: "13px",
                 outline: "none",
               }}
@@ -4026,10 +4272,10 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                 height: "38px",
                 padding: "0 16px",
                 borderRadius: "8px",
-                border: "none",
-                background: "#E3F5FF",
-                color: "#1C1C1C",
-                fontWeight: 600,
+                border: "1px solid rgba(45, 212, 191, 0.35)",
+                background: "#2DD4BF",
+                color: "#061312",
+                fontWeight: 700,
                 fontSize: "13px",
                 cursor: "pointer",
               }}

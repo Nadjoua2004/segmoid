@@ -294,35 +294,35 @@ class AIAgentService:
 
             directives = []
             directives.append(
-                "📋 AUTONOMOUS FLIGHT SURGEON ASSESSMENT & IMMEDIATE DIRECTIVES:"
+                "**AUTONOMOUS FLIGHT SURGEON ASSESSMENT & IMMEDIATE DIRECTIVES**"
             )
             directives.append(
-                f"I have reviewed the astronaut check-in telemetry and classifier findings. {vitals_summary}"
+                "I have reviewed your daily check-in telemetry and health classifier findings."
             )
-            directives.append("\nIMMEDIATE ACTIONS (What to do next):")
+            directives.append("\n**IMMEDIATE ACTIONS (What you should do next):**")
 
             if is_sans:
                 directives.append(
-                    "1. [SANS Neuro-Ocular Protocol]: Perform immediate ocular ultrasound and fundoscopy to assess optic disc edema / sheath diameter. Lower cabin atmospheric CO2 target to <2.0 mmHg."
+                    "1. **SANS Neuro-Ocular Protocol:** Perform ocular ultrasound and fundoscopy to assess optic disc edema / sheath diameter. Keep your habitat atmospheric CO2 below 2.0 mmHg."
                 )
             if is_co2:
                 directives.append(
-                    "2. [ECLSS Life-Support]: Verify LiOH / Amine CO2 scrubber cartridge delta-P. If cabin CO2 >3.0 mmHg, don supplemental oxygen mask (4 L/min) until scrub cycle completes."
+                    "2. **ECLSS Life-Support:** Verify the LiOH / Amine CO2 scrubber cartridge delta-P. If cabin CO2 exceeds 3.0 mmHg, don your supplemental oxygen mask (4 L/min) until the scrub cycle completes."
                 )
             if is_hypoxia:
                 directives.append(
-                    "3. [Oxygenation Countermeasure]: SpO2 desaturation flagged. Restrict strenuous physical exertion; administer nasal cannula O2 (2 L/min) for 30 minutes; re-evaluate pulse oximetry."
+                    "3. **Oxygenation Countermeasure:** SpO2 desaturation flagged. Restrict strenuous physical exertion, administer nasal cannula O2 (2 L/min) for 30 minutes, and re-evaluate your pulse oximetry."
                 )
             if "sleep" in q_lower or "fatigue" in q_lower or "stress" in q_lower:
                 directives.append(
-                    "4. [Circadian Recovery]: Cumulative sleep debt detected. Shift habitat lighting to 460nm blue wake spectrum; mandate a 45-minute tactical sleep recovery block before hazardous work."
+                    "4. **Circadian Recovery:** Cumulative sleep or stress strain detected. Shift lighting to 460nm blue wake spectrum and take a 45-minute tactical sleep recovery block before hazardous tasks."
                 )
 
             directives.append(
-                "5. [Operational Status]: Restrict high-risk tasks (EVA sorties, robotic arm maneuvering) until physiological vitals stabilize within nominal envelope."
+                "5. **Operational Status:** Pause high-risk tasks (EVA sorties, robotic arm maneuvering) until your physiological vitals stabilize within your nominal envelope."
             )
             directives.append(
-                "6. [Crew Coordination]: Results logged to station medical console. If symptoms progress or heart rate/SpO2 exceeds critical margins, emergency dead-man switch will trigger intra-crew alert."
+                "6. **Monitoring & Escalation:** Your results are logged on the station medical console. If your symptoms worsen or vitals cross critical margins, an intra-crew alert will trigger automatically."
             )
 
             return {

@@ -47,17 +47,11 @@ def get_emergency_status(
     # 1. Run timeout evaluation to switch overdue alerts
     check_and_escalate_alarms(db)
 
-    # 2. Check database for active unacknowledged alert for this astronaut (or any unacknowledged)
-    stored = db.query(EmergencyAlertModel).filter(
-        EmergencyAlertModel.acknowledged == False,
-        (EmergencyAlertModel.astronaut_id == astronaut_id) | (EmergencyAlertModel.astronaut_id == "ASTRO-7702-HELENA")
-    ).order_by(EmergencyAlertModel.timestamp.desc()).first()
-
-    if not stored:
-        # Check any unacknowledged alert
-        stored = db.query(EmergencyAlertModel).filter(
-            EmergencyAlertModel.acknowledged == False
-        ).order_by(EmergencyAlertModel.timestamp.desc()).first()
+    # 2. Check database for active unacknowledged alert for this astronaut
+    query = db.query(EmergencyAlertModel).filter(EmergencyAlertModel.acknowledged == False)
+    if astronaut_id:
+        query = query.filter(EmergencyAlertModel.astronaut_id == astronaut_id)
+    stored = query.order_by(EmergencyAlertModel.timestamp.desc()).first()
 
     if stored:
         return model_to_emergency_alert_schema(stored)

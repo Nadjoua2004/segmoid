@@ -7,24 +7,49 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import TelemetryLog, ChatHistoryModel
+from app.models import TelemetryLog, ChatHistoryModel, UserModel
 from app.schemas import ChatQuery, ChatMessage, ProactiveChatPayload
 from app.services.ai_agent import ai_agent_service
+from app.services.auth_service import get_optional_current_user
 from app.api.triage import evaluate_multi_hazard_triage
 from app.schemas import HealthMetrics
 
 router = APIRouter(prefix="/api/chat", tags=["AI Clinical Flight Surgeon"])
 
+
+def _resolve_chat_owner(
+    current_user: Optional[UserModel],
+    fallback_astro_id: Optional[str] = None,
+) -> Optional[str]:
+    """Scope chat history strictly to the authenticated member's own identity."""
+    if current_user is not None:
+        return current_user.callsign or current_user.username
+    cleaned = (fallback_astro_id or "").strip()
+    return cleaned or None
+
+
 @router.post("/query", response_model=ChatMessage)
-def query_flight_surgeon(payload: ChatQuery, db: Session = Depends(get_db)):
+def query_flight_surgeon(
+    payload: ChatQuery,
+    db: Session = Depends(get_db),
+    current_user: Optional[UserModel] = Depends(get_optional_current_user),
+):
     """
     Submits a query to the onboard RAG Flight Surgeon agent.
     Grounds answers in NASA Human Research Program (HRP) guidelines and current astronaut telemetry.
+    Chat turns are isolated per member account.
     """
+    chat_owner = _resolve_chat_owner(current_user, payload.astronaut_id) or payload.astronaut_id
+    telemetry_target = (
+        payload.astronaut_id
+        if (current_user is None or current_user.is_lead)
+        else chat_owner
+    )
+
     context_vitals = None
-    if payload.include_current_vitals:
+    if payload.include_current_vitals and telemetry_target:
         latest = db.query(TelemetryLog).filter(
-            TelemetryLog.astronaut_id == payload.astronaut_id
+            TelemetryLog.astronaut_id == telemetry_target
         ).order_by(TelemetryLog.mission_day.desc(), TelemetryLog.id.desc()).first()
         
         if latest:
@@ -38,20 +63,20 @@ def query_flight_surgeon(payload: ChatQuery, db: Session = Depends(get_db)):
                 "mood_score": latest.mood_score
             }
 
-    # Record user message
+    # Record user message under this member's private thread only
     user_record = ChatHistoryModel(
-        astronaut_id=payload.astronaut_id,
+        astronaut_id=chat_owner,
         role="user",
         content=payload.query
     )
     db.add(user_record)
 
-    # Generate response
-    result = ai_agent_service.answer_query(payload.query, context_vitals, payload.astronaut_id)
+    # Generate response scoped to this member
+    result = ai_agent_service.answer_query(payload.query, context_vitals, chat_owner)
 
-    # Record assistant message
+    # Record assistant message under this member's private thread only
     asst_record = ChatHistoryModel(
-        astronaut_id=payload.astronaut_id,
+        astronaut_id=chat_owner,
         role="assistant",
         content=result["answer"],
         citations="; ".join(result["citations"])
@@ -69,13 +94,22 @@ def query_flight_surgeon(payload: ChatQuery, db: Session = Depends(get_db)):
 def get_chat_history_records(
     astronaut_id: Optional[str] = None,
     limit: int = 50,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Optional[UserModel] = Depends(get_optional_current_user),
 ):
-    """Returns real recorded chat messages from the database."""
-    query = db.query(ChatHistoryModel)
-    if astronaut_id:
-        query = query.filter(ChatHistoryModel.astronaut_id == astronaut_id)
-    rows = query.order_by(ChatHistoryModel.timestamp.asc()).limit(limit).all()
+    """Returns recorded chat messages strictly for the current member's private chat."""
+    chat_owner = _resolve_chat_owner(current_user, astronaut_id)
+    if not chat_owner:
+        return []
+
+    rows = (
+        db.query(ChatHistoryModel)
+        .filter(ChatHistoryModel.astronaut_id == chat_owner)
+        .order_by(ChatHistoryModel.timestamp.desc(), ChatHistoryModel.id.desc())
+        .limit(limit)
+        .all()
+    )
+    rows.reverse()
     return [
         {
             "id": r.id,
@@ -91,12 +125,16 @@ def get_chat_history_records(
 @router.post("/proactive", response_model=ProactiveChatPayload)
 def get_proactive_clinical_dialogue(
     astronaut_id: Optional[str] = "ASTRO-7702-HELENA",
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: Optional[UserModel] = Depends(get_optional_current_user),
 ):
     """
     Generates autonomous proactive clinical dialogue based on current telemetry triage.
     Simulates the AI Flight Surgeon initiating check-in when physiological strain is detected.
     """
+    if current_user is not None and not current_user.is_lead:
+        astronaut_id = current_user.callsign or current_user.username
+
     latest = db.query(TelemetryLog).filter(
         TelemetryLog.astronaut_id == astronaut_id
     ).order_by(TelemetryLog.mission_day.desc(), TelemetryLog.id.desc()).first()

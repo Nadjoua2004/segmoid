@@ -31,12 +31,23 @@ export class ApiError extends Error {
   }
 }
 
+function getStoredAuthHeaders(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  try {
+    const token = window.localStorage.getItem("aegis_station_token");
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  } catch {
+    return {};
+  }
+}
+
 async function request<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const url = `${API_BASE}${endpoint}`;
   const response = await fetch(url, {
     ...options,
     headers: {
       "Content-Type": "application/json",
+      ...getStoredAuthHeaders(),
       ...(options?.headers || {}),
     },
   });
@@ -244,7 +255,10 @@ export const api = {
   async queryFlightSurgeon(query: string, astronautId: string = "CM-1"): Promise<ChatMessage> {
     const response = await fetch(CHAT_API_URL, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...getStoredAuthHeaders(),
+      },
       body: JSON.stringify({
         query,
         astronaut_id: astronautId,

@@ -1,4 +1,4 @@
-﻿"""
+"""
 Daily Check-in Classifier: inference service.
 
 Given one check-in payload it returns a HealthAssessment:
@@ -96,7 +96,7 @@ _FORMAT: Dict[str, Callable[[Dict[str, Any]], str]] = {
     "Heart rate": lambda p: f"{p['vitals']['heart_rate']:g} BPM",
     "Blood pressure": lambda p: f"{p['vitals']['bp_sys']:g}/{p['vitals']['bp_dia']:g} mmHg",
     "Blood oxygen": lambda p: f"{p['vitals']['spo2']:g} %",
-    "Body temperature": lambda p: f"{p['vitals']['core_temp_c']:g} Â°C",
+    "Body temperature": lambda p: f"{p['vitals']['core_temp_c']:g} °C",
     "Heart rate variability": lambda p: f"{p['vitals']['hrv_rmssd']:g} ms",
     "Blood sugar": lambda p: f"{p['vitals']['blood_glucose']:g} mg/dL ({p['vitals']['glucose_context'].replace('_', ' ')})",
     "Sleep": lambda p: (f"{p['sleep']['sleep_hours']:g} h, quality {p['sleep']['sleep_quality']}/5"
@@ -111,7 +111,7 @@ _FORMAT: Dict[str, Callable[[Dict[str, Any]], str]] = {
     "Radiation dose": lambda p: (f"{p['environment']['radiation_msv']:g} mSv"
                                  + ("" if p['environment']['radiation_badge_worn'] else ", badge not worn")),
     "Cabin CO2": lambda p: f"{p['environment']['cabin_co2_mmhg']:g} mmHg",
-    "Cabin temperature": lambda p: f"{p['environment']['cabin_temp_c']:g} Â°C",
+    "Cabin temperature": lambda p: f"{p['environment']['cabin_temp_c']:g} °C",
 }
 
 

@@ -186,7 +186,7 @@ export function MetricCard({
   return (
     <article
       aria-label={`${label}: ${value === null ? "no reading" : `${value} ${unit}`}, ${s.label}`}
-      className={`flex flex-col gap-bio-3 rounded-bio-lg border bg-bio-surface-elevated p-bio-5 shadow-bio-card ${s.card}`}
+      className={`flex flex-col gap-bio-3 rounded-bio-lg border bg-bio-surface-elevated p-bio-5 shadow-bio-card transition-colors hover:border-bio-primary/40 ${s.card}`}
     >
       <div className="flex items-center justify-between gap-bio-2">
         <h3 className="text-bio-sm font-medium text-bio-text-secondary">{label}</h3>
@@ -195,12 +195,12 @@ export function MetricCard({
 
       <p className="flex items-baseline gap-bio-2">
         <span className="font-mono text-bio-2xl font-semibold text-bio-text">{value ?? "—"}</span>
-        {value !== null && <span className="text-bio-sm text-bio-text-muted">{unit}</span>}
+        {value !== null && <span className="text-bio-sm font-medium text-bio-primary">{unit}</span>}
       </p>
 
       <footer className="flex flex-wrap items-center justify-between gap-x-bio-3 gap-y-bio-1 border-t border-bio-border pt-bio-3 text-bio-xs">
         <span className="text-bio-text-muted">Normal {range}</span>
-        {delta && <span className="font-mono text-bio-text-secondary">{delta}</span>}
+        {delta && <span className="font-mono text-bio-accent">{delta}</span>}
       </footer>
     </article>
   );
