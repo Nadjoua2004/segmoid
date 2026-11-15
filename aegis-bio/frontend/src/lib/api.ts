@@ -278,6 +278,7 @@ export const api = {
   },
 
   // Voice question: recorded audio -> Whisper speech-to-text -> same answer path as a typed question
+<<<<<<< HEAD
   // Photo of a device display (pulse oximeter, BP monitor, thermometer, glucose meter): AstroDoc reads it with
   // an open-source vision model and answers. Readings are logged only after the astronaut replies "yes".
   async photoQueryFlightSurgeon(image: Blob, text: string, astronautId: string,
@@ -307,6 +308,14 @@ export const api = {
 
   async voiceQueryFlightSurgeon(audio: Blob, filename: string, astronautId: string,
                                 useReport: boolean = false): Promise<ChatMessage> {
+=======
+  async voiceQueryFlightSurgeon(
+    audio: Blob,
+    filename: string,
+    astronautId: string,
+    useReport: boolean = false
+  ): Promise<ChatMessage> {
+>>>>>>> 7751c0b5aee29fe6f7ffb604e6be72909e61168b
     const form = new FormData();
     form.append("audio", audio, filename);
     form.append("astronaut_id", astronautId);
