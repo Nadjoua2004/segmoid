@@ -160,6 +160,7 @@ def get_active_crew_summary(
                 },
                 astronaut_id=astro_id,
                 mission_day=latest.mission_day,
+                environment=u.environment,
             )
             m = report.metrics
             vitals_bars = [
@@ -174,6 +175,10 @@ def get_active_crew_summary(
             vitals_bars = ["NORMAL", "NORMAL", "NORMAL", "NORMAL", "NORMAL"]
             overall = "NORMAL"
 
+        today_utc = datetime.utcnow().date()
+        last_ts = (latest.created_at or latest.timestamp) if latest else None
+        checked_in_today = bool(last_ts and last_ts.date() == today_utc)
+
         crew_list.append(
             {
                 "id": astro_id,
@@ -183,6 +188,8 @@ def get_active_crew_summary(
                 "status": overall,
                 "vitals_bars": vitals_bars,
                 "has_telemetry": latest is not None,
+                "checked_in_today": checked_in_today,
+                "last_checkin_at": last_ts.isoformat() if last_ts else None,
                 "emergency_contact_callsign": getattr(u, "emergency_contact_callsign", None) or "CREW-MED",
                 "emergency_contact_name": getattr(u, "emergency_contact_name", None) or "Crew Medical Officer",
             }

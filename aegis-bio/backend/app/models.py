@@ -84,6 +84,8 @@ class UserModel(Base):
     is_lead = Column(Boolean, default=False)
     crew_name = Column(String(64), index=True, nullable=False, default="CREW-A")
     station_name = Column(String(120), index=True, nullable=False, default="LUNAR-BASE-ALPHA")
+    # Operating environment chosen by the crew lead (LEO / LUNAR / MARS / DEEP_SPACE); drives classifier thresholds
+    environment = Column(String(24), nullable=False, default="LUNAR")
     is_active = Column(Boolean, default=True)
 
     # Configurable dead-man's switch timeout

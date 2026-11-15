@@ -74,6 +74,7 @@ def init_db():
                 ("crew_name", "VARCHAR(64) DEFAULT 'CREW-A'"),
                 ("station_name", "VARCHAR(120) DEFAULT 'LUNAR-BASE-ALPHA'"),
                 ("alert_timeout_seconds", "INTEGER DEFAULT 60"),
+                ("environment", "VARCHAR(24) DEFAULT 'LUNAR'"),
             ]
             for col_name, col_type in user_columns_to_add:
                 if col_name not in user_cols:

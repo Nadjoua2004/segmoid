@@ -63,6 +63,8 @@ export interface CrewSummaryItem {
   status: "NORMAL" | "MEDIUM" | "CRITICAL";
   vitals_bars: string[]; // 5 items: HR, SpO2, Sleep, Temp, Dose
   has_telemetry: boolean;
+  checked_in_today?: boolean;
+  last_checkin_at?: string | null;
   emergency_contact_callsign: string;
   emergency_contact_name: string;
 }
@@ -204,7 +206,7 @@ export const api = {
   },
 
   // Station Crew & Lead Authentication
-  async registerLead(payload: { username: string; key: string; station_name: string; crew_name: string }): Promise<any> {
+  async registerLead(payload: { username: string; key: string; station_name: string; crew_name: string; environment: string }): Promise<any> {
     return request<any>("/api/auth/register-lead", {
       method: "POST",
       body: JSON.stringify(payload),

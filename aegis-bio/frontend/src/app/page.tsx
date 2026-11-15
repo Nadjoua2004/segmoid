@@ -11,6 +11,30 @@ import {
 } from "@/lib/types";
 import { DailyCheckInModal } from "@/components/DailyCheckInModal";
 import { StationLoginPage } from "@/components/StationLoginPage";
+import {
+  Button,
+  EmptyState,
+  InlineError,
+  MetricCard,
+  Panel,
+  PanelHeader,
+  SegmentedTabs,
+  Spinner,
+  StatusBadge,
+  toStatus,
+  type StatusKey,
+} from "@/components/bio";
+
+type ChartMetric = "spo2" | "heart_rate" | "sleep";
+
+const VITAL_RANGES = {
+  heart_rate: "50–90 bpm",
+  spo2: "96.0–100.0%",
+  sleep_hours: "6.5–9.0 h",
+  radiation_msv: "0.0–2.0 mSv/d",
+} as const;
+
+const VITAL_LABELS = ["Heart rate", "SpO₂", "Sleep", "Core temp", "Radiation dose"] as const;
 
 type ScreenId = "overview" | "daily-checkin" | "crew" | "hazards" | "alerts" | "thresholds";
 
@@ -61,7 +85,7 @@ export default function AegisBioApp() {
   const [selectedAstroId, setSelectedAstroId] = useState<string>("");
   const [showLeftNav, setShowLeftNav] = useState<boolean>(true);
   const [showRightPanel, setShowRightPanel] = useState<boolean>(true);
-  const [chartMetric, setChartMetric] = useState<"spo2" | "heart_rate" | "sleep">("spo2");
+  const [chartMetric, setChartMetric] = useState<ChartMetric>("spo2");
 
   // Floating Chatbot Dialog State
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
@@ -83,6 +107,7 @@ export default function AegisBioApp() {
   // Time Scale State: DAILY (24h), WEEKLY (7d), MONTHLY (30d)
   const [timeScale, setTimeScale] = useState<"DAILY" | "WEEKLY" | "MONTHLY">("WEEKLY");
   const [isLoadingForecast, setIsLoadingForecast] = useState<boolean>(false);
+  const [forecastError, setForecastError] = useState<string>("");
 
   // Crew Lead Authentication & Provisioning State
   const [crewSubTab, setCrewSubTab] = useState<"roster" | "lead-provision">("roster");
@@ -101,6 +126,7 @@ export default function AegisBioApp() {
     key: "station_alpha_key",
     station_name: "Hermes Alpha Station",
     crew_name: "Crew-Alpha",
+    environment: "LUNAR",
   });
   const [provisionMemberForm, setProvisionMemberForm] = useState({
     username: "astro_01",
@@ -110,6 +136,18 @@ export default function AegisBioApp() {
   const [leadFeedback, setLeadFeedback] = useState<string>("");
   const [isModalCheckInOpen, setIsModalCheckInOpen] = useState<boolean>(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const [isNotifOpen, setIsNotifOpen] = useState<boolean>(false);
+  const [reminderSnoozedUntil, setReminderSnoozedUntil] = useState<number>(0);
+  const [justCheckedInAstroIds, setJustCheckedInAstroIds] = useState<string[]>([]);
+  const [nowTick, setNowTick] = useState<number>(() => Date.now());
+
+  // Periodic daytime check (every 60s) to automatically surface / unsnooze daily check-in reminders
+  useEffect(() => {
+    const id = setInterval(() => {
+      setNowTick(Date.now());
+    }, 60_000);
+    return () => clearInterval(id);
+  }, []);
 
   // Restore Station Session from LocalStorage
   useEffect(() => {
@@ -204,12 +242,14 @@ export default function AegisBioApp() {
   const handleTimeScaleChange = async (newScale: "DAILY" | "WEEKLY" | "MONTHLY") => {
     setTimeScale(newScale);
     setIsLoadingForecast(true);
+    setForecastError("");
     try {
       const horizon = newScale === "DAILY" ? 24 : newScale === "MONTHLY" ? 30 : 7;
       const res = await api.getTrajectoryForecast(selectedAstroId || undefined, horizon, newScale);
       setForecast(res);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to load forecast for scale:", newScale, err);
+      setForecastError(err?.message || "Unable to calculate trajectory forecast.");
     } finally {
       setIsLoadingForecast(false);
     }
@@ -350,6 +390,9 @@ export default function AegisBioApp() {
     setCheckInFeedback("");
     try {
       await api.ingestMetrics(checkInForm);
+      setJustCheckedInAstroIds((prev) =>
+        prev.includes(checkInForm.astronaut_id) ? prev : [...prev, checkInForm.astronaut_id]
+      );
       await loadAllData(checkInForm.astronaut_id);
 
       // Fetch fresh classification results
@@ -386,6 +429,9 @@ Classifier results are ready. What is your clinical evaluation, what specific co
   // Handle astronaut daily check-in modal submission (ISS-grade multi-step form)
   const handleModalCheckInSubmit = async (payload: DailyCheckInPayload) => {
     const record = await api.submitDailyCheckIn(payload);
+    setJustCheckedInAstroIds((prev) =>
+      prev.includes(payload.astronaut_id) ? prev : [...prev, payload.astronaut_id]
+    );
     await loadAllData(payload.astronaut_id);
     setIsModalCheckInOpen(false);
 
@@ -500,17 +546,54 @@ Classifier results are ready. What is your clinical evaluation, what specific co
     await loadAllData();
   };
 
-  // Compute deltas from real history
+  // Compute deltas & overview telemetry status (single source of truth from backend classifier)
   const prevMetrics = history.length >= 2 ? history[history.length - 2] : null;
-  const pctDelta = (curr?: number, prev?: number) => {
-    if (curr === undefined || curr === null) return "No data";
+  const deltaLabel = (curr?: number, prev?: number): string | null => {
+    if (curr === undefined || curr === null) return null;
     if (!prev || prev === 0) return "Baseline";
     const diff = ((curr - prev) / prev) * 100;
-    return `${diff >= 0 ? "+" : "−"}${Math.abs(diff).toFixed(1)}%`;
+    return `${diff >= 0 ? "+" : "−"}${Math.abs(diff).toFixed(1)}% vs prev`;
   };
 
-  // Series for the main overview SVG chart
-  const chartValues: number[] = history.map((h) =>
+  const vitalStatus = (barIdx: number): StatusKey => {
+    if (!latestMetrics) return "NODATA";
+    const targetId = selectedAstroId || latestMetrics.astronaut_id;
+    const member =
+      crew.find((m) => m.id.toLowerCase() === String(targetId || "").toLowerCase()) ??
+      (!selectedAstroId ? crew[0] : undefined);
+    if (member?.has_telemetry && member.vitals_bars?.[barIdx]) {
+      return toStatus(member.vitals_bars[barIdx]);
+    }
+    if (barIdx === 0) {
+      const hr = Number(latestMetrics.heart_rate);
+      if (hr < 45 || hr >= 115) return "CRITICAL";
+      if (hr < 50 || hr > 90) return "MEDIUM";
+      return "NORMAL";
+    }
+    if (barIdx === 1) {
+      const spo2 = Number(latestMetrics.spo2);
+      if (spo2 < 93) return "CRITICAL";
+      if (spo2 < 96) return "MEDIUM";
+      return "NORMAL";
+    }
+    if (barIdx === 2) {
+      const sleep = Number(latestMetrics.sleep_hours);
+      if (sleep < 4.5) return "CRITICAL";
+      if (sleep < 6.5 || sleep > 9.0) return "MEDIUM";
+      return "NORMAL";
+    }
+    if (barIdx === 4) {
+      const rad = Number(latestMetrics.radiation_msv);
+      if (rad >= 20) return "CRITICAL";
+      if (rad > 2.0) return "MEDIUM";
+      return "NORMAL";
+    }
+    return "UNCLASSIFIED";
+  };
+
+  // Series for the main overview SVG chart (aligned 1:1 with the last 7 logged Sols)
+  const chartHistory = history.slice(-7);
+  const chartValues: number[] = chartHistory.map((h) =>
     chartMetric === "spo2"
       ? Number(h.spo2)
       : chartMetric === "heart_rate"
@@ -524,6 +607,27 @@ Classifier results are ready. What is your clinical evaluation, what specific co
       ? { min: 45, max: 145, labels: ["145", "120", "95", "70", "45"] }
       : { min: 0, max: 10, labels: ["10h", "7.5", "5.0", "2.5", "0"] };
 
+  const chartMetricLabel =
+    chartMetric === "spo2"
+      ? "Blood oxygen (SpO₂)"
+      : chartMetric === "heart_rate"
+      ? "Heart rate"
+      : "Sleep";
+
+  const normalRange =
+    chartMetric === "spo2"
+      ? { low: 96, high: 100 }
+      : chartMetric === "heart_rate"
+      ? { low: 50, high: 90 }
+      : { low: 6.5, high: 9.0 };
+  const rangeSpan = Math.max(0.1, chartBounds.max - chartBounds.min);
+  const bandTop = 200 - ((normalRange.high - chartBounds.min) / rangeSpan) * 160 - 20;
+  const bandBottom = 200 - ((normalRange.low - chartBounds.min) / rangeSpan) * 160 - 20;
+  const chartBand = {
+    y: Math.max(20, Math.min(180, bandTop)),
+    height: Math.max(0, Math.min(180, bandBottom) - Math.max(20, bandTop)),
+  };
+
   const primaryPath = buildSvgPath(chartValues, chartBounds.min, chartBounds.max);
   const baselinePath =
     chartValues.length > 0
@@ -533,6 +637,16 @@ Classifier results are ready. What is your clinical evaluation, what specific co
           chartBounds.max
         )
       : "";
+
+  const velocityAbs = Math.abs(Number(forecast?.trend_velocity || 0));
+  const trendTone =
+    velocityAbs > 0.5
+      ? "text-bio-critical"
+      : velocityAbs > 0.1
+      ? "text-bio-warning"
+      : "text-bio-nominal";
+  const trendWord =
+    velocityAbs > 0.5 ? "(rising fast)" : velocityAbs > 0.1 ? "(drifting)" : "(stable)";
 
   // Alerts by system counts (computed purely from real history)
   const systemAlertCounts = React.useMemo(() => {
@@ -551,12 +665,12 @@ Classifier results are ready. What is your clinical evaluation, what specific co
       if ((row.hrv_rmssd || 45) < 30) sensors++;
     }
     return [
-      { label: "Resp.", count: resp, color: "#95A4FC" },
-      { label: "Sleep", count: sleep, color: "#96E2D6" },
-      { label: "Radiation", count: rad, color: "#A8A8A8" },
-      { label: "Cardio", count: cardio, color: "#1CC8FF" },
-      { label: "Env.", count: env, color: "#C6A7FF" },
-      { label: "Sensors", count: sensors, color: "#A8C5DA" },
+      { label: "Resp.", count: resp },
+      { label: "Sleep", count: sleep },
+      { label: "Radiation", count: rad },
+      { label: "Cardio", count: cardio },
+      { label: "Env.", count: env },
+      { label: "Sensors", count: sensors },
     ];
   }, [history]);
   const maxSystemCount = Math.max(6, ...systemAlertCounts.map((s) => s.count));
@@ -572,7 +686,56 @@ Classifier results are ready. What is your clinical evaluation, what specific co
     ? Math.max(0, Number((100 - sleepPct - exercisePct - workPct).toFixed(1)))
     : 0;
 
+  const DONUT_CIRCUMFERENCE = 2 * Math.PI * 40;
+  const activityRaw = [
+    { label: "Work", pct: workPct, stroke: "stroke-bio-primary", dot: "bg-bio-primary" },
+    { label: "Sleep", pct: sleepPct, stroke: "stroke-bio-accent", dot: "bg-bio-accent" },
+    { label: "Exercise", pct: exercisePct, stroke: "stroke-bio-nominal", dot: "bg-bio-nominal" },
+    { label: "Other", pct: otherPct, stroke: "stroke-bio-warning", dot: "bg-bio-warning" },
+  ];
+  let runningOffset = 0;
+  const activitySegments = activityRaw.map((item) => {
+    const len = (item.pct / 100) * DONUT_CIRCUMFERENCE;
+    const seg = { ...item, len, offset: runningOffset };
+    runningOffset += len;
+    return seg;
+  });
+
+  const activeAstroId =
+    selectedAstroId || leadProfile?.callsign || leadProfile?.username || checkInForm.astronaut_id;
+
+  const hasCheckedInToday = React.useMemo(() => {
+    if (justCheckedInAstroIds.includes(activeAstroId)) return true;
+    const todayIso = new Date(nowTick).toISOString().slice(0, 10);
+    const todayLocal = new Date(nowTick).toLocaleDateString("en-CA");
+    const crewMatch = crew.find(
+      (c) => c.id.toLowerCase() === activeAstroId.toLowerCase() || c.name.toLowerCase() === activeAstroId.toLowerCase()
+    );
+    if (crewMatch?.checked_in_today) return true;
+    const tsRaw = latestMetrics?.created_at || latestMetrics?.timestamp;
+    if (tsRaw && (!latestMetrics?.astronaut_id || latestMetrics.astronaut_id === activeAstroId)) {
+      const dStr = String(tsRaw).slice(0, 10);
+      if (dStr === todayIso || dStr === todayLocal) return true;
+    }
+    return false;
+  }, [activeAstroId, justCheckedInAstroIds, crew, latestMetrics, nowTick]);
+
+  const isReminderPending = !hasCheckedInToday;
+  const isFloatingReminderVisible =
+    isReminderPending &&
+    nowTick >= reminderSnoozedUntil &&
+    activeScreen !== "daily-checkin" &&
+    !isModalCheckInOpen;
+
+  const reminderWindowLabel = React.useMemo(() => {
+    const hr = new Date(nowTick).getHours();
+    if (hr < 12) return "Morning Window · Pre-Shift Biometrics Due";
+    if (hr < 18) return "Mid-Sol Window · Daily Biometric Check-in Overdue";
+    return "End-of-Sol Window · Final Daily Check-in Required";
+  }, [nowTick]);
+
   const unackAlertsCount = allAlarms.filter((a) => !a.acknowledged).length;
+  const totalNotifCount = unackAlertsCount + (isReminderPending ? 1 : 0);
   const currentMeta = SCREEN_META[activeScreen];
 
   // FIRST PAGE: Dedicated Station Login Page if not authenticated
@@ -602,19 +765,19 @@ Classifier results are ready. What is your clinical evaluation, what specific co
         minHeight: "100vh",
         display: "flex",
         flexWrap: "wrap",
-        background: "#1C1C1C",
-        color: "#FFFFFF",
-        fontFamily: "Inter, 'SF Pro Text', system-ui, sans-serif",
+        background: "var(--bio-canvas)",
+        color: "var(--bio-text-primary)",
+        fontFamily: "var(--font-inter), Inter, 'SF Pro Text', system-ui, sans-serif",
         fontSize: "14px",
         lineHeight: "20px",
         fontVariantNumeric: "tabular-nums",
       }}
     >
       {/* =====================================================================
-          LEFT NAVIGATION SIDEBAR (212px, #1C1C1C, border #333333)
+          LEFT NAVIGATION SIDEBAR (212px, var(--bio-surface), border var(--bio-border-subtle))
       ===================================================================== */}
       {showLeftNav && (
-        <div style={{ flex: "0 0 212px", borderRight: "1px solid #333333", position: "relative", zIndex: 20 }}>
+        <div style={{ flex: "0 0 212px", borderRight: "1px solid var(--bio-border-subtle)", position: "relative", zIndex: 20 }}>
           <nav
             aria-label="Main"
             style={{
@@ -625,8 +788,8 @@ Classifier results are ready. What is your clinical evaluation, what specific co
               flexDirection: "column",
               gap: "16px",
               padding: "20px 16px",
-              background: "#1C1C1C",
-              color: "#FFFFFF",
+              background: "var(--bio-surface)",
+              color: "var(--bio-text-primary)",
             }}
           >
             {/* Brand Logo */}
@@ -972,9 +1135,9 @@ Classifier results are ready. What is your clinical evaluation, what specific co
             alignItems: "center",
             gap: "8px 16px",
             padding: "12px 28px",
-            background: "#1C1C1C",
-            borderBottom: "1px solid #333333",
-            color: "#FFFFFF",
+            background: "var(--bio-surface)",
+            borderBottom: "1px solid var(--bio-border-subtle)",
+            color: "var(--bio-text-primary)",
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: "4px" }}>
@@ -1079,52 +1242,216 @@ Classifier results are ready. What is your clinical evaluation, what specific co
               </svg>
             </button>
 
-            <button
-              type="button"
-              onClick={() => setActiveScreen("alerts")}
-              aria-label="Alerts"
-              style={{
-                position: "relative",
-                width: "36px",
-                height: "36px",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                borderRadius: "8px",
-                background: "transparent",
-                border: "none",
-                cursor: "pointer",
-              }}
-            >
-              <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                <path
-                  d="M5 8 A5 5 0 0 1 15 8 V12 L16.5 14.5 H3.5 L5 12 Z"
-                  stroke="#FFFFFF"
-                  strokeWidth="1.5"
-                  strokeLinejoin="round"
-                />
-                <path
-                  d="M8.2 17 A2 2 0 0 0 11.8 17"
-                  stroke="#FFFFFF"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                />
-              </svg>
-              {unackAlertsCount > 0 && (
-                <span
+            <div style={{ position: "relative" }}>
+              <button
+                type="button"
+                onClick={() => setIsNotifOpen((v) => !v)}
+                aria-label="Notifications"
+                title="Notifications & Daily Check-in Reminders"
+                style={{
+                  position: "relative",
+                  width: "36px",
+                  height: "36px",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  borderRadius: "8px",
+                  background: isNotifOpen ? "#282828" : "transparent",
+                  border: isReminderPending ? "1px solid rgba(245, 158, 11, 0.45)" : "none",
+                  cursor: "pointer",
+                }}
+              >
+                <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                  <path
+                    d="M5 8 A5 5 0 0 1 15 8 V12 L16.5 14.5 H3.5 L5 12 Z"
+                    stroke={isReminderPending ? "#FBBF24" : "#FFFFFF"}
+                    strokeWidth="1.5"
+                    strokeLinejoin="round"
+                  />
+                  <path
+                    d="M8.2 17 A2 2 0 0 0 11.8 17"
+                    stroke={isReminderPending ? "#FBBF24" : "#FFFFFF"}
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                  />
+                </svg>
+                {totalNotifCount > 0 && (
+                  <span
+                    style={{
+                      position: "absolute",
+                      top: "3px",
+                      right: "3px",
+                      minWidth: "16px",
+                      height: "16px",
+                      padding: "0 4px",
+                      borderRadius: "999px",
+                      background: unackAlertsCount > 0 ? "#EF4444" : "#F59E0B",
+                      color: "#1C1C1C",
+                      fontSize: "10px",
+                      fontWeight: 700,
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      boxShadow: "0 0 0 2px #1C1C1C",
+                    }}
+                  >
+                    {totalNotifCount}
+                  </span>
+                )}
+              </button>
+
+              {isNotifOpen && (
+                <div
+                  role="dialog"
+                  aria-label="Station Notifications"
                   style={{
                     position: "absolute",
-                    top: "6px",
-                    right: "6px",
-                    width: "8px",
-                    height: "8px",
-                    borderRadius: "50%",
-                    background: "#EF4444",
-                    boxShadow: "0 0 0 2px #1C1C1C",
+                    top: "44px",
+                    right: 0,
+                    zIndex: 80,
+                    width: "340px",
+                    borderRadius: "14px",
+                    background: "#1C1C1C",
+                    border: "1px solid #333333",
+                    boxShadow: "0 16px 40px rgba(0, 0, 0, 0.65)",
+                    padding: "14px",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "12px",
                   }}
-                />
+                >
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span style={{ fontSize: "13px", fontWeight: 600, color: "#FFFFFF" }}>
+                      Notifications ({totalNotifCount})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsNotifOpen(false);
+                        setActiveScreen("alerts");
+                      }}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        color: "#7DD3FC",
+                        fontSize: "11px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Open Alerts Console →
+                    </button>
+                  </div>
+
+                  {isReminderPending ? (
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "8px",
+                        padding: "12px",
+                        borderRadius: "10px",
+                        background: "linear-gradient(135deg, rgba(245, 158, 11, 0.16), rgba(125, 211, 252, 0.08))",
+                        border: "1px solid rgba(245, 158, 11, 0.5)",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                        <span style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", fontWeight: 700, color: "#FBBF24" }}>
+                          <span
+                            style={{
+                              width: "7px",
+                              height: "7px",
+                              borderRadius: "50%",
+                              background: "#F59E0B",
+                              boxShadow: "0 0 8px #F59E0B",
+                            }}
+                          />
+                          Daily Check-in Required
+                        </span>
+                        <span style={{ fontSize: "10px", color: "#FDE68A", fontFamily: "'JetBrains Mono', monospace" }}>
+                          SOL {checkInForm.mission_day}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: "12px", color: "#E5E5E5", lineHeight: "16px" }}>
+                        <strong>{activeAstroId}</strong> has not submitted today&apos;s biometric &amp; habitat health check-in.
+                      </div>
+                      <div style={{ fontSize: "11px", color: "#A3A3A3" }}>{reminderWindowLabel}</div>
+                      <div style={{ display: "flex", gap: "6px", marginTop: "2px" }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsNotifOpen(false);
+                            setActiveScreen("daily-checkin");
+                          }}
+                          style={{
+                            flex: 1,
+                            height: "30px",
+                            borderRadius: "7px",
+                            border: "none",
+                            background: "#F59E0B",
+                            color: "#1C1C1C",
+                            fontSize: "11px",
+                            fontWeight: 700,
+                            cursor: "pointer",
+                          }}
+                        >
+                          Log Check-in Now
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsNotifOpen(false);
+                            setIsModalCheckInOpen(true);
+                          }}
+                          style={{
+                            height: "30px",
+                            padding: "0 10px",
+                            borderRadius: "7px",
+                            border: "1px solid rgba(125,211,252,0.45)",
+                            background: "rgba(125,211,252,0.12)",
+                            color: "#7DD3FC",
+                            fontSize: "11px",
+                            fontWeight: 600,
+                            cursor: "pointer",
+                          }}
+                        >
+                          Guided Sheet
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        padding: "10px 12px",
+                        borderRadius: "10px",
+                        background: "rgba(150, 226, 214, 0.08)",
+                        border: "1px solid rgba(150, 226, 214, 0.3)",
+                        fontSize: "12px",
+                        color: "#96E2D6",
+                      }}
+                    >
+                      ✓ Daily check-in completed for <strong>{activeAstroId}</strong> today.
+                    </div>
+                  )}
+
+                  {allAlarms.filter((a) => !a.acknowledged).slice(0, 3).map((al) => (
+                    <div
+                      key={al.alert_id}
+                      style={{
+                        padding: "10px",
+                        borderRadius: "8px",
+                        background: "#3B2323",
+                        border: "1px solid #EF4444",
+                        fontSize: "11px",
+                        color: "#FCA5A5",
+                      }}
+                    >
+                      <div style={{ fontWeight: 700 }}>{al.astronaut_id} · {al.severity}</div>
+                      <div style={{ color: "#E5E5E5", marginTop: "2px" }}>{al.message}</div>
+                    </div>
+                  ))}
+                </div>
               )}
-            </button>
+            </div>
 
             <button
               type="button"
@@ -1222,614 +1549,319 @@ Classifier results are ready. What is your clinical evaluation, what specific co
               SCREEN 1: OVERVIEW
           ================================================================= */}
           {activeScreen === "overview" && (
-            <>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <h1 style={{ margin: 0, fontSize: "14px", lineHeight: "20px", fontWeight: 600 }}>
-                  Overview {selectedAstroId ? `· ${selectedAstroId}` : ""}
-                </h1>
-                <button
-                  type="button"
-                  onClick={() => setActiveScreen("daily-checkin")}
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "6px",
-                    height: "32px",
-                    padding: "0 12px",
-                    border: "1px solid #333333",
-                    borderRadius: "8px",
-                    background: "#282828",
-                    color: "#FFFFFF",
-                    fontSize: "13px",
-                    cursor: "pointer",
-                  }}
-                >
-                  + Log Daily Check-in
-                </button>
+            <div className="flex flex-col gap-bio-5">
+              {/* Page header: one primary action for the view */}
+              <header className="flex flex-wrap items-center justify-between gap-bio-3">
+                <div className="flex flex-col gap-bio-1">
+                  <h1 className="text-bio-lg font-semibold text-bio-text">Overview</h1>
+                  <p className="text-bio-sm text-bio-text-secondary">
+                    {latestMetrics
+                      ? `Latest reading: ${latestMetrics.astronaut_id}, Sol ${latestMetrics.mission_day}`
+                      : "No readings logged yet."}
+                  </p>
+                </div>
+                <Button variant="primary" onClick={() => setActiveScreen("daily-checkin")}>
+                  Log daily check-in
+                </Button>
+              </header>
+
+              {/* Vitals. Status comes from the backend classifier (single source of truth). */}
+              <div className="grid grid-cols-1 gap-bio-4 min-[520px]:grid-cols-2 2xl:grid-cols-4">
+                <MetricCard
+                  label="Heart rate"
+                  value={latestMetrics ? String(Math.round(latestMetrics.heart_rate)) : null}
+                  unit="bpm"
+                  status={vitalStatus(0)}
+                  delta={deltaLabel(latestMetrics?.heart_rate, prevMetrics?.heart_rate)}
+                  range={VITAL_RANGES.heart_rate}
+                />
+                <MetricCard
+                  label="Blood oxygen (SpO₂)"
+                  value={latestMetrics ? Number(latestMetrics.spo2).toFixed(1) : null}
+                  unit="%"
+                  status={vitalStatus(1)}
+                  delta={deltaLabel(latestMetrics?.spo2, prevMetrics?.spo2)}
+                  range={VITAL_RANGES.spo2}
+                />
+                <MetricCard
+                  label="Sleep"
+                  value={latestMetrics ? Number(latestMetrics.sleep_hours).toFixed(1) : null}
+                  unit="h"
+                  status={vitalStatus(2)}
+                  delta={deltaLabel(latestMetrics?.sleep_hours, prevMetrics?.sleep_hours)}
+                  range={VITAL_RANGES.sleep_hours}
+                />
+                <MetricCard
+                  label="Radiation dose today"
+                  value={latestMetrics ? Number(latestMetrics.radiation_msv).toFixed(2) : null}
+                  unit="mSv"
+                  status={vitalStatus(4)}
+                  delta={deltaLabel(latestMetrics?.radiation_msv, prevMetrics?.radiation_msv)}
+                  range={VITAL_RANGES.radiation_msv}
+                />
               </div>
 
-              {/* 4 KPI Cards (#E3F5FF and #E5ECF6) */}
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
-                  gap: "28px",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "8px",
-                    padding: "24px",
-                    borderRadius: "16px",
-                    background: "#E3F5FF",
-                    color: "#1C1C1C",
-                  }}
-                >
-                  <span style={{ fontWeight: 600 }}>Heart rate</span>
-                  <span
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: "8px",
-                    }}
-                  >
-                    <span style={{ fontSize: "24px", lineHeight: "36px", fontWeight: 600 }}>
-                      {latestMetrics ? `${Math.round(latestMetrics.heart_rate)}` : "—"}
-                    </span>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "12px" }}>
-                      {pctDelta(latestMetrics?.heart_rate, prevMetrics?.heart_rate)}
-                    </span>
-                  </span>
-                </div>
-
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "8px",
-                    padding: "24px",
-                    borderRadius: "16px",
-                    background: "#E5ECF6",
-                    color: "#1C1C1C",
-                  }}
-                >
-                  <span style={{ fontWeight: 600 }}>SpO₂</span>
-                  <span
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: "8px",
-                    }}
-                  >
-                    <span style={{ fontSize: "24px", lineHeight: "36px", fontWeight: 600 }}>
-                      {latestMetrics ? `${Number(latestMetrics.spo2).toFixed(1)}%` : "—"}
-                    </span>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "12px" }}>
-                      {pctDelta(latestMetrics?.spo2, prevMetrics?.spo2)}
-                    </span>
-                  </span>
-                </div>
-
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "8px",
-                    padding: "24px",
-                    borderRadius: "16px",
-                    background: "#E3F5FF",
-                    color: "#1C1C1C",
-                  }}
-                >
-                  <span style={{ fontWeight: 600 }}>Sleep</span>
-                  <span
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: "8px",
-                    }}
-                  >
-                    <span style={{ fontSize: "24px", lineHeight: "36px", fontWeight: 600 }}>
-                      {latestMetrics ? `${Number(latestMetrics.sleep_hours).toFixed(1)} h` : "—"}
-                    </span>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "12px" }}>
-                      {pctDelta(latestMetrics?.sleep_hours, prevMetrics?.sleep_hours)}
-                    </span>
-                  </span>
-                </div>
-
-                <div
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "8px",
-                    padding: "24px",
-                    borderRadius: "16px",
-                    background: "#E5ECF6",
-                    color: "#1C1C1C",
-                  }}
-                >
-                  <span style={{ fontWeight: 600 }}>Dose today</span>
-                  <span
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: "8px",
-                    }}
-                  >
-                    <span style={{ fontSize: "24px", lineHeight: "36px", fontWeight: 600 }}>
-                      {latestMetrics ? `${Number(latestMetrics.radiation_msv).toFixed(2)} mSv` : "—"}
-                    </span>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: "4px", fontSize: "12px" }}>
-                      {pctDelta(latestMetrics?.radiation_msv, prevMetrics?.radiation_msv)}
-                    </span>
-                  </span>
-                </div>
-              </div>
-
-              {/* Row 2: Main Line Chart + Crew Vitals in Range */}
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "28px" }}>
-                <section
-                  style={{
-                    flex: "3 1 480px",
-                    minWidth: 0,
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "16px",
-                    padding: "24px",
-                    borderRadius: "16px",
-                    background: "#282828",
-                  }}
-                >
-                  <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "16px" }}>
-                    <button
-                      type="button"
-                      onClick={() => setChartMetric("spo2")}
-                      style={{
-                        background: "transparent",
-                        border: "none",
-                        cursor: "pointer",
-                        padding: 0,
-                        fontWeight: chartMetric === "spo2" ? 600 : 400,
-                        color: chartMetric === "spo2" ? "#FFFFFF" : "#A3A3A3",
-                      }}
-                    >
-                      SpO₂
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setChartMetric("heart_rate")}
-                      style={{
-                        background: "transparent",
-                        border: "none",
-                        cursor: "pointer",
-                        padding: 0,
-                        fontWeight: chartMetric === "heart_rate" ? 600 : 400,
-                        color: chartMetric === "heart_rate" ? "#FFFFFF" : "#A3A3A3",
-                      }}
-                    >
-                      Heart rate
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setChartMetric("sleep")}
-                      style={{
-                        background: "transparent",
-                        border: "none",
-                        cursor: "pointer",
-                        padding: 0,
-                        fontWeight: chartMetric === "sleep" ? 600 : 400,
-                        color: chartMetric === "sleep" ? "#FFFFFF" : "#A3A3A3",
-                      }}
-                    >
-                      Sleep
-                    </button>
-                    <span style={{ width: "1px", height: "20px", background: "#444444" }} />
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "12px" }}>
-                      <span
-                        style={{
-                          width: "6px",
-                          height: "6px",
-                          borderRadius: "50%",
-                          background: "#C6C7F8",
-                        }}
+              {/* Trend + crew */}
+              <div className="grid gap-bio-4 2xl:grid-cols-[minmax(0,3fr)_minmax(260px,1fr)]">
+                <Panel aria-labelledby="trend-title">
+                  <PanelHeader
+                    titleId="trend-title"
+                    title="Trend"
+                    description="Last seven logged readings. The shaded band is the normal range."
+                    actions={
+                      <SegmentedTabs<ChartMetric>
+                        label="Metric"
+                        value={chartMetric}
+                        onChange={setChartMetric}
+                        options={[
+                          { value: "spo2", label: "SpO₂" },
+                          { value: "heart_rate", label: "Heart rate" },
+                          { value: "sleep", label: "Sleep" },
+                        ]}
                       />
-                      Logged series
-                    </span>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "12px" }}>
-                      <span
-                        style={{
-                          width: "6px",
-                          height: "6px",
-                          borderRadius: "50%",
-                          background: "#A8C5DA",
-                        }}
-                      />
-                      Initial baseline
-                    </span>
-                  </div>
+                    }
+                  />
 
                   {hasData ? (
-                    <div style={{ display: "flex", gap: "16px" }}>
-                      <div
-                        style={{
-                          display: "flex",
-                          flexDirection: "column",
-                          justifyContent: "space-between",
-                          height: "232px",
-                          paddingBottom: "20px",
-                          fontSize: "12px",
-                          lineHeight: "16px",
-                          color: "#A3A3A3",
-                          textAlign: "right",
-                        }}
-                      >
-                        {chartBounds.labels.map((lbl, idx) => (
-                          <span key={idx}>{lbl}</span>
-                        ))}
-                      </div>
-                      <div
-                        style={{
-                          flex: 1,
-                          minWidth: 0,
-                          display: "flex",
-                          flexDirection: "column",
-                          gap: "4px",
-                        }}
-                      >
-                        <svg
-                          width="100%"
-                          height="212"
-                          viewBox="0 0 600 200"
-                          preserveAspectRatio="none"
-                          style={{ display: "block" }}
-                        >
-                          <path
-                            d={baselinePath}
-                            fill="none"
-                            stroke="#A8C5DA"
-                            strokeWidth="2"
-                            strokeDasharray="5 5"
-                            vectorEffect="non-scaling-stroke"
+                    <>
+                      <ul className="flex flex-wrap gap-x-bio-4 gap-y-bio-2 text-bio-xs text-bio-text-secondary">
+                        <li className="inline-flex items-center gap-bio-2">
+                          <span className="h-0.5 w-bio-4 rounded-full bg-bio-primary" aria-hidden="true" />
+                          Logged readings
+                        </li>
+                        <li className="inline-flex items-center gap-bio-2">
+                          <span className="w-bio-4 border-t-2 border-dashed border-bio-text-muted" aria-hidden="true" />
+                          First reading
+                        </li>
+                        <li className="inline-flex items-center gap-bio-2">
+                          <span
+                            className="h-bio-3 w-bio-4 rounded-bio-sm border border-bio-nominal-border bg-bio-nominal-bg"
+                            aria-hidden="true"
                           />
-                          <path
-                            d={primaryPath}
-                            fill="none"
-                            stroke="#C6C7F8"
-                            strokeWidth="3"
-                            vectorEffect="non-scaling-stroke"
-                          />
-                        </svg>
+                          Normal range
+                        </li>
+                      </ul>
+
+                      <div className="flex gap-bio-3">
                         <div
-                          style={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            fontSize: "12px",
-                            lineHeight: "16px",
-                            color: "#A3A3A3",
-                          }}
+                          className="flex h-52 flex-col justify-between py-5 text-right font-mono text-bio-xs text-bio-text-muted"
+                          aria-hidden="true"
                         >
-                          {history.slice(-7).map((h, i) => (
-                            <span key={i}>Sol {h.mission_day}</span>
+                          {chartBounds.labels.map((lbl, idx) => (
+                            <span key={idx}>{lbl}</span>
                           ))}
                         </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div
-                      style={{
-                        height: "232px",
-                        display: "flex",
-                        flexDirection: "column",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        gap: "12px",
-                        color: "#A3A3A3",
-                        border: "1px dashed #333333",
-                        borderRadius: "12px",
-                      }}
-                    >
-                      <span>Database is currently empty. No telemetry records logged yet.</span>
-                      <button
-                        type="button"
-                        onClick={() => setActiveScreen("daily-checkin")}
-                        style={{
-                          height: "36px",
-                          padding: "0 16px",
-                          borderRadius: "8px",
-                          border: "none",
-                          background: "#E3F5FF",
-                          color: "#1C1C1C",
-                          fontWeight: 600,
-                          cursor: "pointer",
-                        }}
-                      >
-                        Open Daily Check-in
-                      </button>
-                    </div>
-                  )}
-                </section>
-
-                {/* Crew Vitals in Range */}
-                <section
-                  style={{
-                    flex: "1 1 200px",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "16px",
-                    padding: "24px",
-                    borderRadius: "16px",
-                    background: "#282828",
-                  }}
-                >
-                  <h2 style={{ margin: 0, fontSize: "14px", fontWeight: 600 }}>Crew vitals in range</h2>
-                  {crew.length > 0 ? (
-                    crew.map((m) => (
-                      <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => setSelectedAstroId(m.id === selectedAstroId ? "" : m.id)}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          gap: "8px",
-                          minHeight: "28px",
-                          color: "#FFFFFF",
-                          background: "transparent",
-                          border: "none",
-                          padding: 0,
-                          cursor: "pointer",
-                        }}
-                      >
-                        <span>{m.id}</span>
-                        <span style={{ display: "flex", gap: "4px" }}>
-                          {m.vitals_bars.map((st, idx) => (
-                            <span
-                              key={idx}
-                              style={{
-                                width: "14px",
-                                height: "3px",
-                                borderRadius: "2px",
-                                background:
-                                  st === "CRITICAL"
-                                    ? "#EF4444"
-                                    : st === "MEDIUM"
-                                    ? "#F59E0B"
-                                    : "#FFFFFF",
-                              }}
+                        <div className="flex min-w-0 flex-1 flex-col gap-bio-2">
+                          <svg
+                            role="img"
+                            aria-label={`${chartMetricLabel} over the last ${chartValues.length} readings. Latest: ${chartValues[chartValues.length - 1]}.`}
+                            className="block h-52 w-full"
+                            viewBox="0 0 600 200"
+                            preserveAspectRatio="none"
+                          >
+                            {[0, 1, 2, 3, 4].map((i) => (
+                              <line
+                                key={i}
+                                x1="0"
+                                x2="600"
+                                y1={20 + i * 40}
+                                y2={20 + i * 40}
+                                className="stroke-bio-border-subtle"
+                                strokeWidth="1"
+                                vectorEffect="non-scaling-stroke"
+                              />
+                            ))}
+                            <rect
+                              x="0"
+                              width="600"
+                              y={chartBand.y}
+                              height={chartBand.height}
+                              className="fill-bio-nominal-bg"
                             />
-                          ))}
-                        </span>
-                      </button>
-                    ))
+                            <path
+                              d={baselinePath}
+                              fill="none"
+                              className="stroke-bio-text-muted"
+                              strokeWidth="1.5"
+                              strokeDasharray="5 5"
+                              vectorEffect="non-scaling-stroke"
+                            />
+                            <path
+                              d={primaryPath}
+                              fill="none"
+                              className="stroke-bio-primary"
+                              strokeWidth="2.5"
+                              strokeLinejoin="round"
+                              strokeLinecap="round"
+                              vectorEffect="non-scaling-stroke"
+                            />
+                          </svg>
+                          <div className="flex justify-between font-mono text-bio-xs text-bio-text-muted">
+                            {chartHistory.map((h, i) => (
+                              <span key={i}>Sol {h.mission_day}</span>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </>
                   ) : (
-                    <span style={{ color: "#6B6B6B", fontSize: "13px" }}>
-                      No crew vitals recorded yet.
-                    </span>
+                    <EmptyState
+                      className="min-h-56"
+                      title="No readings logged yet"
+                      body="Log a daily check-in to start the trend line and the vital forecast."
+                      action={
+                        <Button onClick={() => setActiveScreen("daily-checkin")}>Open daily check-in</Button>
+                      }
+                    />
                   )}
-                  <span
-                    style={{
-                      marginTop: "auto",
-                      fontSize: "12px",
-                      lineHeight: "16px",
-                      color: "#A3A3A3",
-                    }}
-                  >
-                    HR · SpO₂ · Sleep · Temp · Dose
-                  </span>
-                </section>
+                </Panel>
+
+                <Panel aria-labelledby="crew-vitals-title">
+                  <PanelHeader
+                    titleId="crew-vitals-title"
+                    title="Crew vitals"
+                    description="Select a crew member to filter this page. Bars show heart rate, SpO₂, sleep, temperature and dose."
+                  />
+                  {crew.length > 0 ? (
+                    <ul className="flex flex-col gap-bio-1">
+                      {crew.map((m) => {
+                        const selected = m.id === selectedAstroId;
+                        return (
+                          <li key={m.id}>
+                            <button
+                              type="button"
+                              aria-pressed={selected}
+                              onClick={() => setSelectedAstroId(selected ? "" : m.id)}
+                              className={`bio-focus flex w-full items-center justify-between gap-bio-3 rounded-bio-md border px-bio-3 py-bio-2 text-left transition-colors duration-150 hover:bg-bio-surface-hover active:bg-bio-surface-active ${
+                                selected
+                                  ? "border-bio-border-control bg-bio-surface-elevated"
+                                  : "border-transparent"
+                              }`}
+                            >
+                              <span className="flex min-w-0 flex-col gap-bio-2">
+                                <span className="truncate text-bio-sm font-medium text-bio-text">{m.id}</span>
+                                <span className="flex gap-bio-1" aria-hidden="true">
+                                  {m.vitals_bars.map((st, idx) => {
+                                    const k = m.has_telemetry ? toStatus(st) : "NODATA";
+                                    return (
+                                      <span
+                                        key={idx}
+                                        className={`h-1 w-bio-4 rounded-full ${
+                                          k === "CRITICAL"
+                                            ? "bg-bio-critical"
+                                            : k === "MEDIUM"
+                                            ? "bg-bio-warning"
+                                            : k === "NORMAL"
+                                            ? "bg-bio-text-muted"
+                                            : "bg-bio-border-strong"
+                                        }`}
+                                      />
+                                    );
+                                  })}
+                                </span>
+                                <span className="sr-only">
+                                  {m.has_telemetry
+                                    ? m.vitals_bars
+                                        .map((st, idx) => `${VITAL_LABELS[idx] ?? "Vital"}: ${toStatus(st).toLowerCase()}`)
+                                        .join(", ")
+                                    : "No readings logged"}
+                                </span>
+                              </span>
+                              <StatusBadge status={m.has_telemetry ? toStatus(m.status) : "NODATA"} />
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : (
+                    <EmptyState
+                      title="No crew vitals yet"
+                      body="Vitals appear here once a crew member logs a daily check-in."
+                    />
+                  )}
+                </Panel>
               </div>
 
-              {/* Multi-Scale Time Series Physiological Forecast Panel */}
-              <section
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "20px",
-                  padding: "24px",
-                  borderRadius: "16px",
-                  background: "#282828",
-                  border: "1px solid #333333",
-                }}
-              >
-                <div
-                  style={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: "16px",
-                  }}
-                >
-                  <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                      <span style={{ fontSize: "16px", fontWeight: 600, color: "#FFFFFF" }}>
-                        Multi-Scale Time Series Vital Forecast
+              {/* Vital forecast */}
+              <Panel aria-labelledby="forecast-title" aria-busy={isLoadingForecast}>
+                <PanelHeader
+                  titleId="forecast-title"
+                  title="Vital forecast"
+                  description={
+                    timeScale === "DAILY"
+                      ? "Next 24 hours: damped exponential smoothing with circadian harmonics for core temperature and sleep."
+                      : timeScale === "WEEKLY"
+                      ? "Next 7 days: multi-day trend velocity with damped smoothing."
+                      : "Next 30 days: long-duration spaceflight adaptation with asymptotic plateau damping."
+                  }
+                  actions={
+                    <div className="flex items-center gap-bio-3">
+                      {isLoadingForecast && <Spinner label="Calculating forecast…" />}
+                      <SegmentedTabs<"DAILY" | "WEEKLY" | "MONTHLY">
+                        label="Forecast horizon"
+                        value={timeScale}
+                        onChange={handleTimeScaleChange}
+                        options={[
+                          { value: "DAILY", label: "24 hours" },
+                          { value: "WEEKLY", label: "7 days" },
+                          { value: "MONTHLY", label: "30 days" },
+                        ]}
+                      />
+                    </div>
+                  }
+                />
+
+                {forecastError && (
+                  <InlineError
+                    title="Forecast didn't load"
+                    body={forecastError}
+                    action={<Button onClick={() => handleTimeScaleChange(timeScale)}>Retry</Button>}
+                  />
+                )}
+
+                <dl className="grid grid-cols-1 gap-bio-3 min-[520px]:grid-cols-2 xl:grid-cols-4">
+                  <div className="rounded-bio-md border border-bio-border bg-bio-surface-elevated p-bio-3">
+                    <dt className="text-bio-xs text-bio-text-muted">Forecast model</dt>
+                    <dd className="mt-bio-1 text-bio-sm font-semibold text-bio-text">
+                      {forecast?.model_used || "Holt-Winters damped"}
+                    </dd>
+                  </div>
+                  <div className="rounded-bio-md border border-bio-border bg-bio-surface-elevated p-bio-3">
+                    <dt className="text-bio-xs text-bio-text-muted">Trend velocity</dt>
+                    <dd className={`mt-bio-1 text-bio-sm font-semibold ${trendTone}`}>
+                      <span className="font-mono">
+                        {forecast?.trend_velocity != null
+                          ? `${Number(forecast.trend_velocity).toFixed(3)} per step`
+                          : "—"}
                       </span>
-                      <span
-                        style={{
-                          fontSize: "11px",
-                          fontWeight: 600,
-                          padding: "2px 8px",
-                          borderRadius: "999px",
-                          background:
-                            timeScale === "DAILY"
-                              ? "rgba(125,211,252,0.15)"
-                              : timeScale === "MONTHLY"
-                              ? "rgba(233,168,242,0.15)"
-                              : "rgba(165,180,252,0.15)",
-                          color:
-                            timeScale === "DAILY"
-                              ? "#7DD3FC"
-                              : timeScale === "MONTHLY"
-                              ? "#E9A8F2"
-                              : "#A5B4FC",
-                          border: `1px solid ${
-                            timeScale === "DAILY"
-                              ? "#7DD3FC"
-                              : timeScale === "MONTHLY"
-                              ? "#E9A8F2"
-                              : "#A5B4FC"
-                          }`,
-                        }}
-                      >
-                        {timeScale} HORIZON
-                      </span>
-                      {isLoadingForecast && (
-                        <span style={{ fontSize: "11px", color: "#A3A3A3" }}>Calculating...</span>
+                      {forecast?.trend_velocity != null && (
+                        <span className="ml-bio-2 font-normal">{trendWord}</span>
                       )}
-                    </div>
-                    <span style={{ fontSize: "12px", color: "#A3A3A3" }}>
-                      {timeScale === "DAILY" &&
-                        "24-Hour Intra-Sol Horizon: Damped exponential smoothing with circadian diurnal harmonics (sinusoidal diurnal core temp / sleep cycles)."}
-                      {timeScale === "WEEKLY" &&
-                        "7-Day Tactical Horizon: Multi-day trend velocity & damped smoothing for clinical stabilization."}
-                      {timeScale === "MONTHLY" &&
-                        "30-Day Transit Horizon: Long-duration spaceflight adaptation with asymptotic biological plateau damping."}
-                    </span>
+                    </dd>
                   </div>
-
-                  {/* Horizon Switcher Buttons */}
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      background: "#1C1C1C",
-                      padding: "4px",
-                      borderRadius: "10px",
-                      border: "1px solid #333333",
-                      gap: "4px",
-                    }}
-                  >
-                    {(["DAILY", "WEEKLY", "MONTHLY"] as const).map((sc) => (
-                      <button
-                        key={sc}
-                        type="button"
-                        onClick={() => handleTimeScaleChange(sc)}
-                        style={{
-                          border: "none",
-                          padding: "6px 14px",
-                          borderRadius: "8px",
-                          fontSize: "12px",
-                          fontWeight: 600,
-                          cursor: "pointer",
-                          background: timeScale === sc ? "#333333" : "transparent",
-                          color: timeScale === sc ? "#FFFFFF" : "#A3A3A3",
-                          transition: "all 0.2s ease",
-                        }}
-                      >
-                        {sc === "DAILY" ? "Daily (24h)" : sc === "WEEKLY" ? "Weekly (7d)" : "Monthly (30d)"}
-                      </button>
-                    ))}
+                  <div className="rounded-bio-md border border-bio-border bg-bio-surface-elevated p-bio-3">
+                    <dt className="text-bio-xs text-bio-text-muted">Main strain</dt>
+                    <dd className="mt-bio-1 text-bio-sm font-semibold text-bio-text">
+                      {forecast?.primary_strain_indicator || "Nominal vital envelope"}
+                    </dd>
                   </div>
-                </div>
-
-                {/* Meta stats bar */}
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-                    gap: "12px",
-                  }}
-                >
-                  <div
-                    style={{
-                      background: "#1C1C1C",
-                      padding: "12px 16px",
-                      borderRadius: "10px",
-                      border: "1px solid #333333",
-                    }}
-                  >
-                    <div style={{ fontSize: "11px", color: "#A3A3A3" }}>FORECAST ENGINE</div>
-                    <div style={{ fontSize: "13px", fontWeight: 600, color: "#FFFFFF", marginTop: "4px" }}>
-                      {forecast?.model_used || "Holt-Winters Damped (L-BFGS-B)"}
-                    </div>
+                  <div className="rounded-bio-md border border-bio-border bg-bio-surface-elevated p-bio-3">
+                    <dt className="text-bio-xs text-bio-text-muted">Alarm outlook</dt>
+                    <dd className="mt-bio-1">
+                      <StatusBadge
+                        status={forecast?.alert_triggered ? "CRITICAL" : "NORMAL"}
+                        label={forecast?.alert_triggered ? "Escalation predicted" : "Within thresholds"}
+                      />
+                    </dd>
                   </div>
+                </dl>
 
-                  <div
-                    style={{
-                      background: "#1C1C1C",
-                      padding: "12px 16px",
-                      borderRadius: "10px",
-                      border: "1px solid #333333",
-                    }}
-                  >
-                    <div style={{ fontSize: "11px", color: "#A3A3A3" }}>TREND VELOCITY (SLOPE)</div>
-                    <div
-                      style={{
-                        fontSize: "13px",
-                        fontWeight: 600,
-                        color:
-                          (forecast?.trend_velocity || 0) > 0.5
-                            ? "#EF4444"
-                            : (forecast?.trend_velocity || 0) > 0.1
-                            ? "#F59E0B"
-                            : "#96E2D6",
-                        marginTop: "4px",
-                      }}
-                    >
-                      {forecast?.trend_velocity != null
-                        ? `${Number(forecast.trend_velocity).toFixed(3)} units / step`
-                        : "0.000 / step"}
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      background: "#1C1C1C",
-                      padding: "12px 16px",
-                      borderRadius: "10px",
-                      border: "1px solid #333333",
-                    }}
-                  >
-                    <div style={{ fontSize: "11px", color: "#A3A3A3" }}>PRIMARY STRAIN VITAL</div>
-                    <div style={{ fontSize: "13px", fontWeight: 600, color: "#FFFFFF", marginTop: "4px" }}>
-                      {forecast?.primary_strain_indicator || "Nominal Vital Envelope"}
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      background: "#1C1C1C",
-                      padding: "12px 16px",
-                      borderRadius: "10px",
-                      border: "1px solid #333333",
-                    }}
-                  >
-                    <div style={{ fontSize: "11px", color: "#A3A3A3" }}>ALARM PREDICTION</div>
-                    <div
-                      style={{
-                        fontSize: "13px",
-                        fontWeight: 600,
-                        color: forecast?.alert_triggered ? "#EF4444" : "#96E2D6",
-                        marginTop: "4px",
-                      }}
-                    >
-                      {forecast?.alert_triggered ? "🚨 ESCALATION PREDICTED" : "Nominal (Within Thresholds)"}
-                    </div>
-                  </div>
-                </div>
-
-                {/* Trajectory Timeline Preview */}
                 {forecast?.trajectory && forecast.trajectory.length > 0 ? (
-                  <div>
-                    <div style={{ fontSize: "12px", color: "#A3A3A3", marginBottom: "8px" }}>
-                      Projected Trajectory Points ({forecast.trajectory.length} steps):
-                    </div>
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
-                        gap: "10px",
-                      }}
-                    >
+                  <div className="flex flex-col gap-bio-3">
+                    <h3 className="text-bio-sm font-medium text-bio-text-secondary">
+                      Projected points ({forecast.trajectory.length} steps, up to 8 shown)
+                    </h3>
+                    <ul className="grid grid-cols-2 gap-bio-3 min-[520px]:grid-cols-3 xl:grid-cols-4">
                       {forecast.trajectory
                         .filter((_, idx) => {
                           const total = forecast.trajectory?.length || 0;
@@ -1838,308 +1870,143 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                           return idx % step === 0 || idx === total - 1;
                         })
                         .map((pt, idx) => (
-                          <div
+                          <li
                             key={idx}
-                            style={{
-                              padding: "12px",
-                              borderRadius: "10px",
-                              background: "#1C1C1C",
-                              border: "1px solid #333333",
-                              display: "flex",
-                              flexDirection: "column",
-                              gap: "4px",
-                            }}
+                            className="flex flex-col gap-bio-1 rounded-bio-md border border-bio-border bg-bio-surface-elevated p-bio-3"
                           >
-                            <span style={{ fontSize: "11px", color: "#7DD3FC", fontWeight: 600 }}>
+                            <span className="text-bio-xs font-semibold text-bio-accent">
                               {pt.time_label || `Step ${pt.day}`}
                             </span>
-                            <div style={{ fontSize: "12px", color: "#FFFFFF" }}>
-                              HR: <strong>{Number(pt.heart_rate_predicted).toFixed(0)} bpm</strong>
-                            </div>
-                            <div style={{ fontSize: "11px", color: "#A3A3A3" }}>
-                              SpO₂: {Number(pt.spo2_predicted).toFixed(1)}%
-                            </div>
+                            <span className="font-mono text-bio-sm font-semibold text-bio-text">
+                              {Number(pt.heart_rate_predicted).toFixed(0)} bpm
+                            </span>
+                            <span className="font-mono text-bio-xs text-bio-text-secondary">
+                              SpO₂ {Number(pt.spo2_predicted).toFixed(1)}%
+                            </span>
                             {pt.lower_ci_heart_rate != null && pt.upper_ci_heart_rate != null && (
-                              <div style={{ fontSize: "10px", color: "#6B6B6B" }}>
-                                95% CI: [{Math.round(pt.lower_ci_heart_rate)}-{Math.round(pt.upper_ci_heart_rate)}]
-                              </div>
+                              <span className="font-mono text-bio-xs text-bio-text-muted">
+                                95% CI {Math.round(pt.lower_ci_heart_rate)}–{Math.round(pt.upper_ci_heart_rate)}
+                              </span>
                             )}
-                            <div style={{ fontSize: "11px", color: pt.cardiovascular_strain_index > 0.6 ? "#EF4444" : "#96E2D6" }}>
-                              CSI: {Number(pt.cardiovascular_strain_index).toFixed(2)}
-                            </div>
-                          </div>
+                            <span
+                              className={`font-mono text-bio-xs ${
+                                pt.cardiovascular_strain_index > 0.6 ? "text-bio-critical" : "text-bio-nominal"
+                              }`}
+                            >
+                              Strain {Number(pt.cardiovascular_strain_index).toFixed(2)}
+                              {pt.cardiovascular_strain_index > 0.6 ? " (high)" : ""}
+                            </span>
+                          </li>
                         ))}
-                    </div>
+                    </ul>
                   </div>
                 ) : (
-                  <div style={{ padding: "16px", borderRadius: "10px", background: "#1C1C1C", color: "#A3A3A3", fontSize: "13px" }}>
-                    No baseline historical data logged yet to fit the time-series model. Submit a Daily Check-in to initialize the trajectory forecaster.
-                  </div>
+                  <EmptyState
+                    title="Not enough history to forecast"
+                    body="The time-series model needs logged readings to fit. Submit a daily check-in to initialise it."
+                  />
                 )}
 
-                {/* Countermeasure Card */}
                 {forecast?.recommended_countermeasure && (
-                  <div
-                    style={{
-                      padding: "14px 18px",
-                      borderRadius: "10px",
-                      background: "rgba(150, 226, 214, 0.08)",
-                      border: "1px solid rgba(150, 226, 214, 0.25)",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "12px",
-                    }}
-                  >
-                    <span style={{ fontSize: "18px" }}>🩺</span>
-                    <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                      <span style={{ fontSize: "11px", color: "#96E2D6", fontWeight: 600 }}>
-                        CLINICAL COUNTERMEASURE RECOMMENDATION
-                      </span>
-                      <span style={{ fontSize: "13px", color: "#FFFFFF" }}>
-                        {forecast.recommended_countermeasure}
-                      </span>
+                  <div className="flex items-start gap-bio-3 rounded-bio-md border border-bio-primary-glow bg-bio-primary-subtle p-bio-4">
+                    <svg
+                      className="mt-bio-1 h-4 w-4 shrink-0 text-bio-primary"
+                      viewBox="0 0 16 16"
+                      fill="currentColor"
+                      aria-hidden="true"
+                    >
+                      <path d="M6 1h4v5h5v4h-5v5H6v-5H1V6h5z" />
+                    </svg>
+                    <div className="flex flex-col gap-bio-1">
+                      <h3 className="text-bio-xs font-semibold text-bio-primary">Recommended countermeasure</h3>
+                      <p className="max-w-[65ch] text-bio-sm text-bio-text">{forecast.recommended_countermeasure}</p>
                     </div>
                   </div>
                 )}
-              </section>
+              </Panel>
 
-              {/* Row 3: Alerts by System + Crew Time by Activity */}
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "28px" }}>
-                <section
-                  style={{
-                    flex: "1 1 320px",
-                    minWidth: 0,
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "16px",
-                    padding: "24px",
-                    borderRadius: "16px",
-                    background: "#282828",
-                  }}
-                >
-                  <h2 style={{ margin: 0, fontSize: "14px", fontWeight: 600 }}>
-                    Alerts by system · logged history
-                  </h2>
-                  <div style={{ display: "flex", gap: "16px" }}>
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        justifyContent: "space-between",
-                        height: "212px",
-                        paddingBottom: "20px",
-                        fontSize: "12px",
-                        lineHeight: "16px",
-                        color: "#A3A3A3",
-                        textAlign: "right",
-                      }}
-                    >
-                      <span>{maxSystemCount}</span>
-                      <span>{Math.round((maxSystemCount * 2) / 3)}</span>
-                      <span>{Math.round(maxSystemCount / 3)}</span>
-                      <span>0</span>
+              {/* History summaries */}
+              <div className="grid gap-bio-4 xl:grid-cols-2">
+                <Panel aria-labelledby="system-title">
+                  <PanelHeader
+                    titleId="system-title"
+                    title="Out-of-range readings by system"
+                    description="How many logged readings fell outside expected limits, per body system."
+                  />
+                  <div className="flex flex-col gap-bio-2">
+                    <div className="flex h-52 items-end gap-bio-3 border-b border-bio-border-strong">
+                      {systemAlertCounts.map((item) => (
+                        <div
+                          key={item.label}
+                          className="flex flex-1 flex-col items-center justify-end gap-bio-1"
+                        >
+                          <span className="font-mono text-bio-xs text-bio-text-secondary">{item.count}</span>
+                          <div
+                            className="w-bio-6 rounded-t-bio-sm bg-bio-accent"
+                            style={{
+                              height: `${
+                                item.count === 0 ? 0 : Math.max(8, Math.round((item.count / maxSystemCount) * 160))
+                              }px`,
+                            }}
+                          />
+                        </div>
+                      ))}
                     </div>
-                    <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "4px" }}>
-                      <div
-                        style={{
-                          height: "192px",
-                          display: "grid",
-                          gridTemplateColumns: "repeat(6, minmax(0, 1fr))",
-                          gap: "16px",
-                          alignItems: "end",
-                          justifyItems: "center",
-                        }}
-                      >
-                        {systemAlertCounts.map((item) => {
-                          const barH = Math.max(6, Math.round((item.count / maxSystemCount) * 192));
-                          return (
-                            <div
-                              key={item.label}
-                              title={`${item.label}: ${item.count}`}
-                              style={{
-                                width: "28px",
-                                height: `${barH}px`,
-                                borderRadius: "8px",
-                                background: item.color,
-                                opacity: item.count === 0 ? 0.25 : 1,
-                              }}
-                            />
-                          );
-                        })}
-                      </div>
-                      <div
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: "repeat(6, minmax(0, 1fr))",
-                          gap: "16px",
-                          fontSize: "12px",
-                          lineHeight: "16px",
-                          color: "#A3A3A3",
-                          textAlign: "center",
-                        }}
-                      >
-                        {systemAlertCounts.map((item) => (
-                          <span key={item.label}>{item.label}</span>
+                    <div className="flex gap-bio-3 text-center text-bio-xs text-bio-text-secondary">
+                      {systemAlertCounts.map((item) => (
+                        <span key={item.label} className="flex-1">
+                          {item.label}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </Panel>
+
+                <Panel aria-labelledby="activity-title">
+                  <PanelHeader
+                    titleId="activity-title"
+                    title="Crew time by activity"
+                    description="Share of a 24-hour sol."
+                  />
+                  <div className="flex flex-wrap items-center gap-bio-6">
+                    <svg
+                      className="h-36 w-36 shrink-0"
+                      viewBox="0 0 100 100"
+                      role="img"
+                      aria-label="Donut chart of crew time by activity. Values are listed beside it."
+                    >
+                      <circle cx="50" cy="50" r="40" fill="none" className="stroke-bio-border-strong" strokeWidth="14" />
+                      {hasData &&
+                        activitySegments.map((seg) => (
+                          <circle
+                            key={seg.label}
+                            cx="50"
+                            cy="50"
+                            r="40"
+                            fill="none"
+                            className={seg.stroke}
+                            strokeWidth="14"
+                            strokeDasharray={`${seg.len} ${DONUT_CIRCUMFERENCE - seg.len}`}
+                            strokeDashoffset={-seg.offset}
+                            transform="rotate(-90 50 50)"
+                          />
                         ))}
-                      </div>
-                    </div>
-                  </div>
-                </section>
-
-                <section
-                  style={{
-                    flex: "1 1 320px",
-                    minWidth: 0,
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "16px",
-                    padding: "24px",
-                    borderRadius: "16px",
-                    background: "#282828",
-                  }}
-                >
-                  <h2 style={{ margin: 0, fontSize: "14px", fontWeight: 600 }}>
-                    Crew time by activity · 24 h
-                  </h2>
-                  <div
-                    style={{
-                      flex: 1,
-                      display: "flex",
-                      flexWrap: "wrap",
-                      alignItems: "center",
-                      gap: "40px",
-                    }}
-                  >
-                    <svg width="140" height="140" viewBox="0 0 100 100">
-                      <circle
-                        cx="50"
-                        cy="50"
-                        r="40"
-                        fill="none"
-                        stroke="#333333"
-                        strokeWidth="14"
-                      />
-                      {hasData && (
-                        <>
-                          <circle
-                            cx="50"
-                            cy="50"
-                            r="40"
-                            fill="none"
-                            stroke="#A8A8A8"
-                            strokeWidth="14"
-                            strokeDasharray="100.30 151.03"
-                            strokeDashoffset="-2.00"
-                            transform="rotate(-90 50 50)"
-                          />
-                          <circle
-                            cx="50"
-                            cy="50"
-                            r="40"
-                            fill="none"
-                            stroke="#1CC8FF"
-                            strokeWidth="14"
-                            strokeDasharray="61.35 189.98"
-                            strokeDashoffset="-106.30"
-                            transform="rotate(-90 50 50)"
-                          />
-                          <circle
-                            cx="50"
-                            cy="50"
-                            r="40"
-                            fill="none"
-                            stroke="#96E2D6"
-                            strokeWidth="14"
-                            strokeDasharray="22.14 229.19"
-                            strokeDashoffset="-171.65"
-                            transform="rotate(-90 50 50)"
-                          />
-                          <circle
-                            cx="50"
-                            cy="50"
-                            r="40"
-                            fill="none"
-                            stroke="#95A4FC"
-                            strokeWidth="14"
-                            strokeDasharray="51.54 199.78"
-                            strokeDashoffset="-197.78"
-                            transform="rotate(-90 50 50)"
-                          />
-                        </>
-                      )}
                     </svg>
-                    <div
-                      style={{
-                        flex: 1,
-                        minWidth: "160px",
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: "16px",
-                        fontSize: "12px",
-                        lineHeight: "16px",
-                      }}
-                    >
-                      <span style={{ display: "flex", justifyContent: "space-between" }}>
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
-                          <span
-                            style={{
-                              width: "6px",
-                              height: "6px",
-                              borderRadius: "50%",
-                              background: "#A8A8A8",
-                            }}
-                          />
-                          Work
-                        </span>
-                        <span>{hasData ? `${workPct}%` : "—"}</span>
-                      </span>
-                      <span style={{ display: "flex", justifyContent: "space-between" }}>
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
-                          <span
-                            style={{
-                              width: "6px",
-                              height: "6px",
-                              borderRadius: "50%",
-                              background: "#1CC8FF",
-                            }}
-                          />
-                          Sleep
-                        </span>
-                        <span>{hasData ? `${sleepPct}%` : "—"}</span>
-                      </span>
-                      <span style={{ display: "flex", justifyContent: "space-between" }}>
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
-                          <span
-                            style={{
-                              width: "6px",
-                              height: "6px",
-                              borderRadius: "50%",
-                              background: "#96E2D6",
-                            }}
-                          />
-                          Exercise
-                        </span>
-                        <span>{hasData ? `${exercisePct}%` : "—"}</span>
-                      </span>
-                      <span style={{ display: "flex", justifyContent: "space-between" }}>
-                        <span style={{ display: "inline-flex", alignItems: "center", gap: "8px" }}>
-                          <span
-                            style={{
-                              width: "6px",
-                              height: "6px",
-                              borderRadius: "50%",
-                              background: "#95A4FC",
-                            }}
-                          />
-                          Other
-                        </span>
-                        <span>{hasData ? `${otherPct}%` : "—"}</span>
-                      </span>
-                    </div>
+                    <ul className="flex min-w-40 flex-1 flex-col gap-bio-3 text-bio-sm">
+                      {activitySegments.map((seg) => (
+                        <li key={seg.label} className="flex items-center justify-between gap-bio-3">
+                          <span className="inline-flex items-center gap-bio-2 text-bio-text-secondary">
+                            <span className={`h-2 w-2 rounded-full ${seg.dot}`} aria-hidden="true" />
+                            {seg.label}
+                          </span>
+                          <span className="font-mono text-bio-text">{hasData ? `${seg.pct}%` : "—"}</span>
+                        </li>
+                      ))}
+                    </ul>
                   </div>
-                </section>
+                </Panel>
               </div>
-            </>
+            </div>
           )}
 
           {/* =================================================================
@@ -2855,6 +2722,20 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                             />
                           </label>
                           <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                            <span style={{ fontSize: "12px", color: "#A3A3A3" }}>Operating Location (applies to every crew member)</span>
+                            <select
+                              required
+                              value={leadRegisterForm.environment}
+                              onChange={(e) => setLeadRegisterForm({ ...leadRegisterForm, environment: e.target.value })}
+                              style={{ height: "36px", padding: "0 12px", borderRadius: "8px", border: "1px solid #333333", background: "#1C1C1C", color: "#FFFFFF" }}
+                            >
+                              <option value="LUNAR">Moon (Lunar surface / orbit)</option>
+                              <option value="MARS">Mars (surface / orbit)</option>
+                              <option value="LEO">Low Earth Orbit (ISS-type)</option>
+                              <option value="DEEP_SPACE">Deep-space transit</option>
+                            </select>
+                          </label>
+                          <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                             <span style={{ fontSize: "12px", color: "#A3A3A3" }}>Crew Name</span>
                             <input
                               type="text"
@@ -3471,10 +3352,10 @@ Classifier results are ready. What is your clinical evaluation, what specific co
       </div>
 
       {/* =====================================================================
-          RIGHT SIDEBAR (280px, #1C1C1C, border #333333)
+          RIGHT SIDEBAR (280px, var(--bio-surface), border var(--bio-border-subtle))
       ===================================================================== */}
       {showRightPanel && (
-        <div style={{ flex: "0 0 280px", borderLeft: "1px solid #333333" }}>
+        <div style={{ flex: "0 0 280px", borderLeft: "1px solid var(--bio-border-subtle)" }}>
           <aside
             aria-label="Alerts and crew"
             style={{
@@ -3485,15 +3366,272 @@ Classifier results are ready. What is your clinical evaluation, what specific co
               flexDirection: "column",
               gap: "24px",
               padding: "20px",
-              background: "#1C1C1C",
-              color: "#FFFFFF",
+              background: "var(--bio-surface)",
+              color: "var(--bio-text-primary)",
             }}
           >
             {/* Alerts Feed */}
             <section style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-              <h2 style={{ margin: 0, padding: "8px 4px", fontSize: "14px", fontWeight: 600 }}>
-                Alerts
-              </h2>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 4px" }}>
+                <h2 style={{ margin: 0, fontSize: "14px", fontWeight: 600 }}>Notifications &amp; Alerts</h2>
+                {activeAlert && !activeAlert.acknowledged && (
+                  <span
+                    style={{
+                      fontSize: "11px",
+                      padding: "2px 6px",
+                      borderRadius: "4px",
+                      background: "#EF4444",
+                      color: "#1C1C1C",
+                      fontWeight: 700,
+                      animation: "pulse 1.5s infinite",
+                    }}
+                  >
+                    ACTIVE
+                  </span>
+                )}
+              </div>
+
+              {/* Automatic Daily Check-in Reminder in Notifications Feed */}
+              {isReminderPending && (
+                <div
+                  role="status"
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "8px",
+                    padding: "12px",
+                    borderRadius: "12px",
+                    background: "linear-gradient(145deg, rgba(245, 158, 11, 0.16), rgba(28, 28, 28, 0.95))",
+                    border: "1px solid rgba(245, 158, 11, 0.55)",
+                    boxShadow: "0 0 14px rgba(245, 158, 11, 0.15)",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "6px" }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "12px", fontWeight: 700, color: "#FBBF24" }}>
+                      <span
+                        style={{
+                          width: "8px",
+                          height: "8px",
+                          borderRadius: "50%",
+                          background: "#F59E0B",
+                          boxShadow: "0 0 8px #F59E0B",
+                        }}
+                      />
+                      Daily Check-in Due
+                    </span>
+                    <span style={{ fontSize: "10px", color: "#FDE68A", fontFamily: "'JetBrains Mono', monospace" }}>
+                      SOL {checkInForm.mission_day}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: "11px", color: "#E5E5E5", lineHeight: "15px" }}>
+                    <strong>{activeAstroId}</strong> has not logged today&apos;s daily biometric check-in yet.
+                  </div>
+                  <div style={{ fontSize: "10px", color: "#A3A3A3" }}>{reminderWindowLabel}</div>
+                  <div style={{ display: "flex", gap: "6px", marginTop: "2px" }}>
+                    <button
+                      type="button"
+                      onClick={() => setActiveScreen("daily-checkin")}
+                      style={{
+                        flex: 1,
+                        height: "28px",
+                        borderRadius: "6px",
+                        border: "none",
+                        background: "#F59E0B",
+                        color: "#1C1C1C",
+                        fontSize: "11px",
+                        fontWeight: 700,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Check in Now
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsModalCheckInOpen(true)}
+                      style={{
+                        height: "28px",
+                        padding: "0 8px",
+                        borderRadius: "6px",
+                        border: "1px solid rgba(125,211,252,0.45)",
+                        background: "transparent",
+                        color: "#7DD3FC",
+                        fontSize: "11px",
+                        fontWeight: 600,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Guided
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Automatic Floating Daily Check-in Notification Toast during the day */}
+              {isFloatingReminderVisible && (
+                <div
+                  role="alert"
+                  aria-live="polite"
+                  style={{
+                    position: "fixed",
+                    top: "72px",
+                    right: showRightPanel ? "300px" : "24px",
+                    zIndex: 75,
+                    width: "340px",
+                    padding: "14px 16px",
+                    borderRadius: "14px",
+                    background: "linear-gradient(135deg, #262015 0%, #1C1C1C 100%)",
+                    border: "1px solid #F59E0B",
+                    boxShadow: "0 14px 36px rgba(0, 0, 0, 0.65), 0 0 20px rgba(245, 158, 11, 0.2)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "8px",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "12px", fontWeight: 700, color: "#FBBF24" }}>
+                      <span
+                        style={{
+                          width: "8px",
+                          height: "8px",
+                          borderRadius: "50%",
+                          background: "#F59E0B",
+                          boxShadow: "0 0 8px #F59E0B",
+                        }}
+                      />
+                      DAILY CHECK-IN REMINDER
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setReminderSnoozedUntil(Date.now() + 30 * 60 * 1000)}
+                      title="Snooze reminder for 30 minutes"
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        color: "#A3A3A3",
+                        fontSize: "11px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Snooze 30m ✕
+                    </button>
+                  </div>
+                  <div style={{ fontSize: "12px", color: "#FFFFFF", lineHeight: "17px" }}>
+                    Astronaut <strong>{activeAstroId}</strong> hasn&apos;t completed today&apos;s Sol {checkInForm.mission_day} health check-in.
+                  </div>
+                  <div style={{ fontSize: "11px", color: "#FDE68A" }}>{reminderWindowLabel}</div>
+                  <div style={{ display: "flex", gap: "8px", marginTop: "4px" }}>
+                    <button
+                      type="button"
+                      onClick={() => setActiveScreen("daily-checkin")}
+                      style={{
+                        flex: 1,
+                        height: "32px",
+                        borderRadius: "8px",
+                        border: "none",
+                        background: "#F59E0B",
+                        color: "#1C1C1C",
+                        fontSize: "12px",
+                        fontWeight: 700,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Start Check-in
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsModalCheckInOpen(true)}
+                      style={{
+                        height: "32px",
+                        padding: "0 12px",
+                        borderRadius: "8px",
+                        border: "1px solid rgba(125, 211, 252, 0.45)",
+                        background: "rgba(125, 211, 252, 0.12)",
+                        color: "#7DD3FC",
+                        fontSize: "12px",
+                        fontWeight: 600,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Guided Sheet
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Active Emergency Card Docked in Alerts Panel */}
+              {activeAlert && !activeAlert.acknowledged && (
+                <div
+                  role="alert"
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "8px",
+                    padding: "12px",
+                    borderRadius: "12px",
+                    background: "#3B2323",
+                    border: "1px solid #EF4444",
+                    boxShadow: "0 0 12px rgba(239, 68, 68, 0.25)",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                    <span
+                      style={{
+                        width: "8px",
+                        height: "8px",
+                        borderRadius: "50%",
+                        background: "#EF4444",
+                        boxShadow: "0 0 8px #EF4444",
+                      }}
+                    />
+                    <span style={{ fontSize: "12px", fontWeight: 700, color: "#FCA5A5" }}>
+                      {activeAlert.astronaut_id} · {activeAlert.hazard_origin}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: "11px", color: "#FCA5A5", lineHeight: "15px" }}>
+                    {activeAlert.status === "SWITCHED_TO_EMERGENCY_CONTACT"
+                      ? `Escalated to ${activeAlert.emergency_contact_callsign || "Emergency Contact"}`
+                      : `Timeout: ${activeAlert.remaining_seconds ?? activeAlert.timeout_seconds}s · Contact: ${
+                          activeAlert.emergency_contact_callsign || "CREW-MED"
+                        }`}
+                  </div>
+                  <div style={{ display: "flex", gap: "6px", marginTop: "4px" }}>
+                    <button
+                      type="button"
+                      onClick={() => handleAnswerAsOwner(activeAlert.alert_id)}
+                      style={{
+                        flex: 1,
+                        height: "30px",
+                        borderRadius: "6px",
+                        border: "1px solid #F87171",
+                        background: "transparent",
+                        color: "#FFFFFF",
+                        fontSize: "11px",
+                        fontWeight: 600,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Silence tone (I am OK)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveScreen("alerts")}
+                      style={{
+                        height: "30px",
+                        padding: "0 10px",
+                        borderRadius: "6px",
+                        border: "none",
+                        background: "#EF4444",
+                        color: "#1C1C1C",
+                        fontSize: "11px",
+                        fontWeight: 700,
+                        cursor: "pointer",
+                      }}
+                    >
+                      View
+                    </button>
+                  </div>
+                </div>
+              )}
               {allAlarms.length > 0 ? (
                 allAlarms.slice(0, 4).map((al) => (
                   <button
@@ -4077,6 +4215,20 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                       color: "#FFFFFF",
                     }}
                   />
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <span style={{ fontSize: "12px", color: "#A3A3A3" }}>Operating Location (applies to every crew member)</span>
+                  <select
+                    required
+                    value={leadRegisterForm.environment}
+                    onChange={(e) => setLeadRegisterForm({ ...leadRegisterForm, environment: e.target.value })}
+                    style={{ height: "36px", padding: "0 12px", borderRadius: "8px", border: "1px solid #333333", background: "#1C1C1C", color: "#FFFFFF" }}
+                  >
+                    <option value="LUNAR">Moon (Lunar surface / orbit)</option>
+                    <option value="MARS">Mars (surface / orbit)</option>
+                    <option value="LEO">Low Earth Orbit (ISS-type)</option>
+                    <option value="DEEP_SPACE">Deep-space transit</option>
+                  </select>
                 </label>
                 <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
                   <span style={{ fontSize: "12px", color: "#A3A3A3" }}>Crew Division Name</span>

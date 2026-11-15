@@ -2,15 +2,69 @@
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+/* Fonts (Inter, JetBrains Mono) are loaded by next/font in layout.tsx and exposed as
+   --font-inter / --font-mono. Do not @import them here. */
 
 :root {
-  --bg-main: #1C1C1C;
-  --bg-surface: #282828;
-  --border-subtle: #333333;
-  --text-primary: #FFFFFF;
-  --text-secondary: #A3A3A3;
-  --text-muted: #6B6B6B;
+  /* =========================================================================
+     BIOMEDICAL PRECISION TOKENS (dark-only)
+     Contrast figures are computed (WCAG relative luminance), not estimated.
+     Body text >= 4.5:1, large text and UI component boundaries >= 3:1.
+     ========================================================================= */
+
+  /* Surfaces */
+  --bio-canvas: #0C0E12;            /* page background */
+  --bio-surface: #131720;           /* nav, panels */
+  --bio-surface-elevated: #1C222F;  /* cards */
+  --bio-surface-hover: #242C3D;
+  --bio-surface-active: #2C3549;
+
+  /* Borders.
+     subtle/strong are DECORATIVE dividers (1.1-1.8:1). They are allowed because they
+     carry no information on their own.
+     control is for anything that must be perceivable as a component boundary
+     (inputs, buttons, tabs): 3.2:1 on elevated, 3.6:1 on surface. */
+  --bio-border-subtle: #232B3B;
+  --bio-border-strong: #333F54;
+  --bio-border-control: #61718A;
+  --bio-border-focus: #2DD4BF;      /* focus ring, 8.6:1 on elevated */
+
+  /* Text. Floors are the worst case across canvas / surface / elevated / hover / active. */
+  --bio-text-primary: #F1F5F9;      /* floor 11.2:1 */
+  --bio-text-secondary: #94A3B8;    /* floor 4.8:1 (safe on every surface incl. pressed) */
+  --bio-text-muted: #8696AB;        /* 5.3:1 on elevated, 4.6:1 on hover. 4.07:1 on surface-active: do NOT use there. (Was #8091A5: 4.33:1 on hover, failed AA.) */
+
+  /* Brand */
+  --bio-primary: #2DD4BF;           /* floor 6.6:1; text on a primary fill: use canvas (10.4:1) */
+  --bio-primary-hover: #5EEAD4;     /* lighter on hover (dark UI); canvas text on it 13.1:1 */
+  --bio-primary-subtle: rgba(45, 212, 191, 0.10);
+  --bio-primary-glow: rgba(45, 212, 191, 0.22);
+
+  --bio-accent: #60A5FA;            /* floor 4.8:1 */
+  --bio-accent-subtle: rgba(96, 165, 250, 0.10);
+
+  /* Semantic status (never used alone: always paired with an icon and a word) */
+  --bio-nominal: #34D399;           /* floor 6.4:1 */
+  --bio-nominal-bg: rgba(52, 211, 153, 0.12);
+  --bio-nominal-border: rgba(52, 211, 153, 0.28);
+
+  --bio-warning: #FBBF24;           /* floor 7.4:1 */
+  --bio-warning-bg: rgba(251, 191, 36, 0.12);
+  --bio-warning-border: rgba(251, 191, 36, 0.28);
+
+  --bio-critical: #FB7185;          /* TEXT/ICON: floor 4.6:1 */
+  --bio-critical-bold: #F43F5E;     /* FILL ONLY with canvas-colored text (5.3:1). As text it is 4.34:1 on elevated: fails AA. */
+  --bio-critical-bg: rgba(244, 63, 94, 0.14);
+  --bio-critical-border: rgba(244, 63, 94, 0.35);
+
+  /* Radii */
+  --bio-radius-sm: 6px;
+  --bio-radius-md: 10px;
+  --bio-radius-lg: 14px;
+
+  /* Elevation */
+  --bio-card-shadow: rgba(0, 0, 0, 0.45);
+  --bio-critical-glow: rgba(244, 63, 94, 0.25);
 }
 
 * {
@@ -19,9 +73,9 @@
 
 body {
   margin: 0;
-  color: #FFFFFF;
-  background: #1C1C1C;
-  font-family: Inter, 'SF Pro Text', system-ui, -apple-system, sans-serif;
+  color: var(--bio-text-primary);
+  background: var(--bio-canvas);
+  font-family: var(--font-inter), Inter, 'SF Pro Text', system-ui, -apple-system, sans-serif;
   font-size: 14px;
   line-height: 20px;
   font-variant-numeric: tabular-nums;
@@ -29,16 +83,35 @@ body {
 }
 
 a {
-  color: #7DD3FC;
+  color: var(--bio-accent);
   text-decoration: none;
 }
 
 a:hover {
-  color: #BAE6FD;
+  color: var(--bio-primary-hover);
 }
 
 input, select, textarea, button {
   font-family: inherit;
+}
+
+/* One focus treatment for every interactive element that opts in. */
+@layer components {
+  .bio-focus {
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-bio focus-visible:ring-offset-2 focus-visible:ring-offset-bio-canvas;
+  }
+}
+
+/* Motion is feedback, not decoration. Honour the OS setting. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 ::-webkit-scrollbar {
@@ -47,14 +120,14 @@ input, select, textarea, button {
 }
 
 ::-webkit-scrollbar-track {
-  background: #1C1C1C;
+  background: var(--bio-canvas);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #333333;
+  background: var(--bio-border-strong);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #444444;
+  background: var(--bio-border-control);
 }

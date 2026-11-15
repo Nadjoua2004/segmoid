@@ -52,6 +52,7 @@ def register_crew_lead(
         callsign=payload.username.upper(),
         crew_name=payload.crew_name.upper(),
         station_name=payload.station_name.upper(),
+        environment=payload.environment,
         is_lead=True,
         is_active=True
     )
@@ -144,6 +145,7 @@ def create_crew_member(
         callsign=payload.callsign or payload.username.upper(),
         crew_name=current_user.crew_name,
         station_name=current_user.station_name,
+        environment=current_user.environment,
         is_lead=False,
         is_active=True
     )

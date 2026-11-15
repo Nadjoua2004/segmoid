@@ -18,7 +18,7 @@ from app.schemas import (
     Countermeasure,
     MetricClassificationReport,
 )
-from app.services.metric_classifier import metric_classifier
+from app.services.metric_classifier import metric_classifier, resolve_environment
 from app.services.seeder import seed_initial_telemetry
 
 router = APIRouter(prefix="/api/triage", tags=["Clinical Triage & Classifiers"])
@@ -38,7 +38,8 @@ def classify_individual_metrics(metrics: HealthMetrics):
     return metric_classifier.evaluate_all_metrics(
         metrics_dict=raw_dict,
         astronaut_id=metrics.astronaut_id,
-        mission_day=metrics.mission_day
+        mission_day=metrics.mission_day,
+        environment=resolve_environment(metrics.astronaut_id),
     )
 
 # -------------------------------------------------------------
@@ -58,7 +59,8 @@ def evaluate_multi_hazard_triage(metrics: HealthMetrics) -> TriageResult:
     metric_report = metric_classifier.evaluate_all_metrics(
         metrics_dict=metrics.dict(),
         astronaut_id=metrics.astronaut_id,
-        mission_day=metrics.mission_day
+        mission_day=metrics.mission_day,
+        environment=resolve_environment(metrics.astronaut_id),
     )
     metric_evals = metric_report.metrics
     clinical_flags = []

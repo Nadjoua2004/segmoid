@@ -1,4 +1,4 @@
-"""
+﻿"""
 Deterministic clinical safety rules shared by the data generator and the inference service.
 
 `safety_floor` lists every reading in the critical range of the rule-based metric classifier
@@ -31,11 +31,11 @@ GLUCOSE_CRITICAL_LOW = 54
 GLUCOSE_CRITICAL_HIGH = 250
 
 
-def safety_floor(p: Dict[str, Any]) -> List[Tuple[str, str]]:
+def safety_floor(p: Dict[str, Any], environment: str | None = None) -> List[Tuple[str, str]]:
     """(concern, reason) for every reading in the critical range. Empty list = no critical reading."""
     hits: List[Tuple[str, str]] = []
     for section, field, concern in RULE_METRICS:
-        ev = metric_classifier.classify_single_metric(field, float(p[section][field]))
+        ev = metric_classifier.classify_single_metric(field, float(p[section][field]), environment)
         if ev.status == "CRITICAL":
             hits.append((concern, f"{ev.label}: {ev.value:g} {ev.unit}".strip()))
     g = float(p["vitals"]["blood_glucose"])

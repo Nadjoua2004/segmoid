@@ -1,4 +1,4 @@
-"""
+﻿"""
 Daily Check-in Classifier: inference service.
 
 Given one check-in payload it returns a HealthAssessment:
@@ -29,6 +29,7 @@ from app.ml.features import (
 )
 from app.ml.train import DEFAULT_MODEL_PATH
 from app.ml.rules import safety_floor
+from app.services.metric_classifier import resolve_environment
 from app.schemas import (
     AssessmentStatus, ClassifierInfo, Concern, ConcernProbability, ContributingFactor, HealthAssessment,
 )
@@ -95,7 +96,7 @@ _FORMAT: Dict[str, Callable[[Dict[str, Any]], str]] = {
     "Heart rate": lambda p: f"{p['vitals']['heart_rate']:g} BPM",
     "Blood pressure": lambda p: f"{p['vitals']['bp_sys']:g}/{p['vitals']['bp_dia']:g} mmHg",
     "Blood oxygen": lambda p: f"{p['vitals']['spo2']:g} %",
-    "Body temperature": lambda p: f"{p['vitals']['core_temp_c']:g} °C",
+    "Body temperature": lambda p: f"{p['vitals']['core_temp_c']:g} Â°C",
     "Heart rate variability": lambda p: f"{p['vitals']['hrv_rmssd']:g} ms",
     "Blood sugar": lambda p: f"{p['vitals']['blood_glucose']:g} mg/dL ({p['vitals']['glucose_context'].replace('_', ' ')})",
     "Sleep": lambda p: (f"{p['sleep']['sleep_hours']:g} h, quality {p['sleep']['sleep_quality']}/5"
@@ -110,7 +111,7 @@ _FORMAT: Dict[str, Callable[[Dict[str, Any]], str]] = {
     "Radiation dose": lambda p: (f"{p['environment']['radiation_msv']:g} mSv"
                                  + ("" if p['environment']['radiation_badge_worn'] else ", badge not worn")),
     "Cabin CO2": lambda p: f"{p['environment']['cabin_co2_mmhg']:g} mmHg",
-    "Cabin temperature": lambda p: f"{p['environment']['cabin_temp_c']:g} °C",
+    "Cabin temperature": lambda p: f"{p['environment']['cabin_temp_c']:g} Â°C",
 }
 
 
@@ -210,7 +211,7 @@ def _build(b: Dict[str, Any], payload: Dict[str, Any], s_row: np.ndarray, s_clas
     concern = _as_concern(c_classes[int(c_order[0])])
 
     # Safety floor: critical readings can only raise the status, never lower it.
-    hits = safety_floor(payload)
+    hits = safety_floor(payload, resolve_environment(payload.get("astronaut_id")))
     status: AssessmentStatus = "CRITICAL" if hits else model_status
 
     # Keep status and concern coherent. If a safety rule had to supply the concern, the model's

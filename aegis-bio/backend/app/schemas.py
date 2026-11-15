@@ -150,6 +150,9 @@ class CrewLeadRegister(BaseModel):
     key: str = Field(..., min_length=4, description="Secret access key")
     station_name: str = Field(..., description="Station or Habitat name (e.g. ARTEMIS-BASE-ALPHA)")
     crew_name: str = Field(..., description="Crew identifier (e.g. CREW-A)")
+    environment: Literal["LEO", "LUNAR", "MARS", "DEEP_SPACE"] = Field(
+        ..., description="Where the crew operates; every member's metrics are classified against this environment"
+    )
 
 class CrewMemberCreate(BaseModel):
     username: str = Field(..., min_length=3, max_length=64, description="Crew member username")
@@ -165,6 +168,7 @@ class UserResponse(BaseModel):
     username: str
     crew_name: str
     station_name: str
+    environment: str = "LUNAR"
     is_lead: bool = False
     callsign: Optional[str] = None
     alert_timeout_seconds: int = 60

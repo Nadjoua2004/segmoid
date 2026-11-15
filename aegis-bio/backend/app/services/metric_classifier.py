@@ -1,4 +1,4 @@
-"""
+﻿"""
 Classifier 1: Metric-Level Severity Classifier
 Evaluates each individual astronaut biometric and environmental metric:
 Classifies each into: 'NORMAL', 'MEDIUM', or 'CRITICAL' based on aerospace medical baselines.
@@ -65,7 +65,7 @@ METRIC_THRESHOLDS = {
     },
     "core_temp_c": {
         "label": "Core Body Temperature",
-        "unit": "°C",
+        "unit": "Â°C",
         "nominal": (36.5, 37.5),
         "medium_high": (37.5, 38.2),
         "critical_high": 38.2,
@@ -87,12 +87,62 @@ METRIC_THRESHOLDS = {
     }
 }
 
+# Per-location overrides (illustrative values; tune with flight surgeons).
+# Same reading, different meaning: e.g. the baseline radiation and habitat atmosphere differ.
+ENVIRONMENT_OVERRIDES = {
+    "LEO": {},  # ISS / low Earth orbit = default thresholds
+    "LUNAR": {
+        "radiation_msv": {"nominal": (0.0, 3.0), "medium_high": (3.0, 20.0)},  # no magnetosphere, ~1.4 mSv/day GCR
+        "spo2": {"nominal": (95.0, 100.0), "critical_low": 92.0},  # hypobaric / O2-enriched habitat
+        "cabin_co2_mmhg": {"nominal": (0.0, 2.5), "critical_high": 4.0},  # sealed regolith habitat, less ventilation margin
+    },
+    "MARS": {
+        "radiation_msv": {"nominal": (0.0, 2.5), "medium_high": (2.5, 20.0)},  # ~0.7 surface, ~1.8 transit
+        "spo2": {"nominal": (95.0, 100.0), "critical_low": 92.0},
+        "cabin_co2_mmhg": {"nominal": (0.0, 2.5), "critical_high": 4.0},
+        "heart_rate": {"nominal": (50.0, 95.0)},  # 0.38 g cardiovascular adaptation
+        "sleep_hours": {"nominal": (6.0, 9.0)},  # 24h39m sol shifts circadian rhythm
+    },
+    "DEEP_SPACE": {
+        "radiation_msv": {"nominal": (0.0, 2.2), "medium_high": (2.2, 20.0)},  # ~1.8 mSv/day cruise
+    },
+}
+
+DEFAULT_ENVIRONMENT = "LEO"
+
+
+VALID_ENVIRONMENTS = tuple(ENVIRONMENT_OVERRIDES.keys())
+
+
+def resolve_environment(astronaut_id: str | None) -> str:
+    """Look up the astronaut's crew environment (set by the crew lead) in the users table."""
+    if not astronaut_id:
+        return DEFAULT_ENVIRONMENT
+    from app.database import SessionLocal
+    from app.models import UserModel
+    db = SessionLocal()
+    try:
+        u = (
+            db.query(UserModel)
+            .filter((UserModel.callsign == astronaut_id) | (UserModel.username == astronaut_id))
+            .first()
+        )
+        env = (getattr(u, "environment", None) or "").upper()
+        return env if env in ENVIRONMENT_OVERRIDES else DEFAULT_ENVIRONMENT
+    except Exception:
+        return DEFAULT_ENVIRONMENT
+    finally:
+        db.close()
+
 class MetricSeverityClassifier:
     """Classifier 1: Determines whether each biometric is NORMAL, MEDIUM, or CRITICAL."""
 
     @staticmethod
-    def classify_single_metric(name: str, value: float) -> MetricEvaluation:
+    def classify_single_metric(name: str, value: float, environment: str | None = None) -> MetricEvaluation:
         cfg = METRIC_THRESHOLDS.get(name)
+        if cfg:
+            overrides = ENVIRONMENT_OVERRIDES.get((environment or DEFAULT_ENVIRONMENT).upper(), {})
+            cfg = {**cfg, **overrides.get(name, {})}
         if not cfg:
             return MetricEvaluation(
                 metric_name=name,
@@ -204,12 +254,12 @@ class MetricSeverityClassifier:
         elif name == "core_temp_c":
             if value >= cfg["critical_high"] or value <= cfg["critical_low"]:
                 status = "CRITICAL"
-                note = f"Thermal dysregulation ({value}°C). Hyperthermia or hypothermia alert."
-                deviation_str = f"{value - 37.0:+.1f}°C"
+                note = f"Thermal dysregulation ({value}Â°C). Hyperthermia or hypothermia alert."
+                deviation_str = f"{value - 37.0:+.1f}Â°C"
             elif value > cfg["nominal"][1]:
                 status = "MEDIUM"
-                note = f"Subfebrile elevation ({value}°C). Post-EVA exertion heat load."
-                deviation_str = f"+{value - cfg['nominal'][1]:.1f}°C"
+                note = f"Subfebrile elevation ({value}Â°C). Post-EVA exertion heat load."
+                deviation_str = f"+{value - cfg['nominal'][1]:.1f}Â°C"
 
         # 9. HRV RMSSD
         elif name == "hrv_rmssd":
@@ -235,11 +285,11 @@ class MetricSeverityClassifier:
         )
 
     @classmethod
-    def evaluate_all_metrics(cls, metrics_dict: Dict[str, Any], astronaut_id: str = "ASTRO-7702-HELENA", mission_day: int = 34) -> MetricClassificationReport:
+    def evaluate_all_metrics(cls, metrics_dict: Dict[str, Any], astronaut_id: str = "ASTRO-7702-HELENA", mission_day: int = 34, environment: str | None = None) -> MetricClassificationReport:
         evaluations = {}
         for k, v in metrics_dict.items():
             if k in METRIC_THRESHOLDS and v is not None:
-                evaluations[k] = cls.classify_single_metric(k, float(v))
+                evaluations[k] = cls.classify_single_metric(k, float(v), environment)
 
         critical_count = sum(1 for e in evaluations.values() if e.status == "CRITICAL")
         medium_count = sum(1 for e in evaluations.values() if e.status == "MEDIUM")
