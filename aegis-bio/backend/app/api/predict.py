@@ -37,6 +37,7 @@ def predict_7_day_trajectory(
         return None
 
     records = records[-lookback_days:]
+    target_astro_id = astronaut_id or (records[-1].astronaut_id if records else settings.ASTRONAUT_ID)
     
     history = [
         {
@@ -56,7 +57,7 @@ def predict_7_day_trajectory(
     
     result = calculate_trajectory_forecast(
         history_records=history,
-        astronaut_id=astronaut_id,
+        astronaut_id=target_astro_id,
         horizon_days=horizon_days,
         time_scale=time_scale
     )

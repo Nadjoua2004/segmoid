@@ -10,13 +10,14 @@ GET  /api/checkins/{id}        fetch one check-in
 """
 from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database import get_db
 from app.schemas import ClassifierInfo, DailyCheckInCreate, DailyCheckInRead, HealthAssessment
 from app.services import checkin_classifier
+from app.services.health_predictor_agent import run_agent_background_prediction
 from app.services.checkin_service import (
     CheckInConflictError,
     create_checkin,
@@ -34,13 +35,18 @@ router = APIRouter(prefix="/api/checkins", tags=["Daily Check-ins"])
     status_code=status.HTTP_201_CREATED,
     responses={409: {"description": "A check-in already exists for this astronaut and mission day"}},
 )
-def create_daily_checkin(payload: DailyCheckInCreate, db: Session = Depends(get_db)) -> DailyCheckInRead:
+def create_daily_checkin(
+    payload: DailyCheckInCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+) -> DailyCheckInRead:
     """
     Submit a daily check-in. Vitals are also written to telemetry, so triage and the 7-day
     forecast pick them up immediately. The response includes rule-based lifestyle/environment flags.
     """
     try:
         row = create_checkin(db, payload)
+        background_tasks.add_task(run_agent_background_prediction, payload.astronaut_id)
     except CheckInConflictError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return to_read_model(row)

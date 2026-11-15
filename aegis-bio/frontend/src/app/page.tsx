@@ -10,6 +10,7 @@ import {
   DailyCheckInPayload,
 } from "@/lib/types";
 import { DailyCheckInModal } from "@/components/DailyCheckInModal";
+import { StationLoginPage } from "@/components/StationLoginPage";
 
 type ScreenId = "overview" | "daily-checkin" | "crew" | "hazards" | "alerts" | "thresholds";
 
@@ -108,6 +109,21 @@ export default function AegisBioApp() {
   });
   const [leadFeedback, setLeadFeedback] = useState<string>("");
   const [isModalCheckInOpen, setIsModalCheckInOpen] = useState<boolean>(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+
+  // Restore Station Session from LocalStorage
+  useEffect(() => {
+    try {
+      const savedToken = localStorage.getItem("aegis_station_token");
+      const savedProfile = localStorage.getItem("aegis_station_profile");
+      if (savedToken && savedProfile) {
+        setLeadToken(savedToken);
+        setLeadProfile(JSON.parse(savedProfile));
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
 
   // Unified Daily Check-in Form State (Single Screen, No Tabs)
   const [checkInForm, setCheckInForm] = useState<HealthMetrics>({
@@ -146,7 +162,10 @@ export default function AegisBioApp() {
 
   const loadAllData = useCallback(
     async (astroFilter?: string, customScale?: "DAILY" | "WEEKLY" | "MONTHLY") => {
-      const targetAstro = astroFilter !== undefined ? astroFilter : selectedAstroId || undefined;
+      const myId = leadProfile?.callsign || leadProfile?.username;
+      const targetAstro = leadProfile?.is_lead
+        ? (astroFilter !== undefined ? astroFilter : selectedAstroId || undefined)
+        : (myId || undefined);
       const targetScale = customScale || timeScale;
       const horizon = targetScale === "DAILY" ? 24 : targetScale === "MONTHLY" ? 30 : 7;
       const results = await Promise.allSettled([
@@ -179,7 +198,7 @@ export default function AegisBioApp() {
       if (results[6].status === "fulfilled") setAllAlarms(results[6].value || []);
       if (results[7].status === "fulfilled") setChatHistory(results[7].value || []);
     },
-    [selectedAstroId, timeScale]
+    [selectedAstroId, timeScale, leadProfile]
   );
 
   const handleTimeScaleChange = async (newScale: "DAILY" | "WEEKLY" | "MONTHLY") => {
@@ -203,14 +222,22 @@ export default function AegisBioApp() {
     try {
       const res = await api.loginWithKey(leadLoginForm.username, leadLoginForm.key);
       setLeadToken(res.access_token);
-      setLeadProfile({
+      const prof = {
         username: res.username,
         station_name: res.station_name,
         crew_name: res.crew_name,
         callsign: res.callsign,
         is_lead: res.is_lead,
-      });
+      };
+      setLeadProfile(prof);
+      try {
+        localStorage.setItem("aegis_station_token", res.access_token);
+        localStorage.setItem("aegis_station_profile", JSON.stringify(prof));
+      } catch {
+        // ignore
+      }
       setLeadFeedback(`Authenticated as Crew Lead for ${res.crew_name} on ${res.station_name}`);
+      setIsAuthModalOpen(false);
       await loadAllData();
     } catch (err: any) {
       setLeadFeedback(`Login failed: ${err.message}`);
@@ -223,18 +250,38 @@ export default function AegisBioApp() {
     try {
       const res = await api.registerLead(leadRegisterForm);
       setLeadToken(res.access_token);
-      setLeadProfile({
+      const prof = {
         username: res.username,
         station_name: res.station_name,
         crew_name: res.crew_name,
         callsign: res.callsign,
         is_lead: res.is_lead,
-      });
+      };
+      setLeadProfile(prof);
+      try {
+        localStorage.setItem("aegis_station_token", res.access_token);
+        localStorage.setItem("aegis_station_profile", JSON.stringify(prof));
+      } catch {
+        // ignore
+      }
       setLeadFeedback(`Station Lead registered: ${res.crew_name} on ${res.station_name}`);
+      setIsAuthModalOpen(false);
       await loadAllData();
     } catch (err: any) {
       setLeadFeedback(`Registration failed: ${err.message}`);
     }
+  };
+
+  const handleSignOut = () => {
+    setLeadToken("");
+    setLeadProfile(null);
+    try {
+      localStorage.removeItem("aegis_station_token");
+      localStorage.removeItem("aegis_station_profile");
+    } catch {
+      // ignore
+    }
+    setLeadFeedback("Signed out of station console.");
   };
 
   const handleProvisionMember = async (e: React.FormEvent) => {
@@ -258,6 +305,44 @@ export default function AegisBioApp() {
     loadAllData();
   }, [loadAllData]);
 
+  // Helper to send classifier results directly to AstroDoc chatbot and auto-open interface
+  const dispatchClassifierResultsToChatbot = async (
+    astroId: string,
+    prompt: string
+  ) => {
+    // 1. Immediately open and expand the chatbot interface
+    setIsChatOpen(true);
+    setIsChatExpanded(true);
+
+    // 2. Append optimistic user turn so prompt appears immediately
+    const userTurn: ChatHistoryItem = {
+      id: Date.now(),
+      astronaut_id: astroId,
+      role: "user",
+      content: prompt,
+      citations: [],
+      timestamp: new Date().toISOString(),
+    };
+    setChatHistory((prev) => [...prev, userTurn]);
+
+    // 3. Query the flight surgeon model for clinical directives & what to do next
+    try {
+      const reply = await api.queryFlightSurgeon(prompt, astroId);
+      const assistantTurn: ChatHistoryItem = {
+        id: Date.now() + 1,
+        astronaut_id: astroId,
+        role: "assistant",
+        content: reply.content,
+        citations: reply.citations || [],
+        timestamp: reply.timestamp || new Date().toISOString(),
+      };
+      setChatHistory((prev) => [...prev, assistantTurn]);
+    } catch (err: any) {
+      console.error("Failed to query chatbot with classifier results:", err);
+      setChatError("Could not retrieve autonomous recommendations from AstroDoc.");
+    }
+  };
+
   // Submit Unified Daily Check-in Form
   const handleCheckInSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -266,9 +351,31 @@ export default function AegisBioApp() {
     try {
       await api.ingestMetrics(checkInForm);
       await loadAllData(checkInForm.astronaut_id);
+
+      // Fetch fresh classification results
+      const triageRes = await api.getCurrentTriage(checkInForm.astronaut_id).catch(() => null);
+      const status = triageRes?.overall_status || "NOMINAL";
+      const riskScore = triageRes?.overall_risk_score ?? 0;
+      const flags =
+        triageRes?.clinical_flags && triageRes.clinical_flags.length > 0
+          ? triageRes.clinical_flags.join("; ")
+          : "All parameters within standard aerospace envelope";
+      const vitalsSummary = `HR: ${checkInForm.heart_rate} bpm, SpO2: ${checkInForm.spo2}%, Sleep: ${checkInForm.sleep_hours}h, Dose: ${checkInForm.radiation_msv} mSv, CO2: ${checkInForm.cabin_co2_mmhg} mmHg`;
+
       setCheckInFeedback(
-        `Saved check-in for ${checkInForm.astronaut_id} (Sol ${checkInForm.mission_day}). Triage and Supabase synced.`
+        `Saved check-in for ${checkInForm.astronaut_id} (Sol ${checkInForm.mission_day}). Classifier status: ${status}. Opening AstroDoc for next steps...`
       );
+
+      const prompt = `[DAILY HEALTH CHECK-IN CLASSIFICATION REPORT]
+Astronaut: ${checkInForm.astronaut_id} (Sol ${checkInForm.mission_day})
+Classification Status: ${status} (Risk Score: ${riskScore}/100)
+Clinical Flags / Abnormalities: ${flags}
+Vitals Logged: ${vitalsSummary}
+
+Classifier results are ready. What is your clinical evaluation, what specific countermeasures should be applied, and what should the crew do next?`;
+
+      // Dispatch directly to chatbot and open interface
+      await dispatchClassifierResultsToChatbot(checkInForm.astronaut_id, prompt);
     } catch (err: any) {
       setCheckInFeedback(`Error: ${err.message || "Failed to save check-in"}`);
     } finally {
@@ -280,7 +387,35 @@ export default function AegisBioApp() {
   const handleModalCheckInSubmit = async (payload: DailyCheckInPayload) => {
     const record = await api.submitDailyCheckIn(payload);
     await loadAllData(payload.astronaut_id);
-    setCheckInFeedback(`Successfully submitted guided check-in for ${payload.astronaut_id}.`);
+    setIsModalCheckInOpen(false);
+
+    const assessment = record.assessment;
+    const astroId = payload.astronaut_id;
+    const sol = payload.mission_day;
+    const status = assessment?.status || "NOMINAL";
+    const hazard = assessment?.hazard || "Spaceflight Adaptation";
+    const concern = assessment?.concern_label || assessment?.primary_concern || "Routine Telemetry";
+    const reasons = assessment?.safety_reasons?.join("; ") || "Nominal thresholds maintained";
+    const factors =
+      assessment?.key_factors?.map((f) => `${f.factor}: ${f.value}`).join(", ") ||
+      "All parameters logged";
+
+    setCheckInFeedback(
+      `Submitted guided check-in for ${astroId}. Classifier status: ${status}. Opening AstroDoc for clinical guidance...`
+    );
+
+    const prompt = `[DAILY HEALTH CHECK-IN CLASSIFICATION REPORT]
+Astronaut: ${astroId} (Sol ${sol})
+Classification Status: ${status}
+Primary Hazard: ${hazard}
+Primary Concern: ${concern}
+Safety Floor Directives: ${reasons}
+Key Predictive Factors: ${factors}
+
+Classifier results are ready. What is your clinical evaluation, what specific countermeasures should be applied, and what should the crew do next?`;
+
+    // Dispatch directly to chatbot and open interface
+    await dispatchClassifierResultsToChatbot(astroId, prompt);
     return record;
   };
 
@@ -439,6 +574,27 @@ export default function AegisBioApp() {
 
   const unackAlertsCount = allAlarms.filter((a) => !a.acknowledged).length;
   const currentMeta = SCREEN_META[activeScreen];
+
+  // FIRST PAGE: Dedicated Station Login Page if not authenticated
+  if (!leadToken) {
+    return (
+      <StationLoginPage
+        onLoginSuccess={(token, profile) => {
+          setLeadToken(token);
+          setLeadProfile(profile);
+          try {
+            localStorage.setItem("aegis_station_token", token);
+            localStorage.setItem("aegis_station_profile", JSON.stringify(profile));
+          } catch {
+            // ignore
+          }
+          if (profile.callsign || profile.username) {
+            setSelectedAstroId(profile.callsign || profile.username);
+          }
+        }}
+      />
+    );
+  }
 
   return (
     <div
@@ -619,93 +775,55 @@ export default function AegisBioApp() {
                 Daily Check-in
               </button>
 
-              <button
-                type="button"
-                onClick={() => setActiveScreen("crew")}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "8px",
-                  height: "36px",
-                  padding: "0 8px",
-                  borderRadius: "8px",
-                  color: "#FFFFFF",
-                  border: "none",
-                  cursor: "pointer",
-                  width: "100%",
-                  textAlign: "left",
-                  whiteSpace: "nowrap",
-                  background: activeScreen === "crew" ? "rgba(255,255,255,0.1)" : "transparent",
-                }}
-              >
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-                  <path
-                    d="M3 4.5 L6 7.5 L9 4.5"
-                    stroke="#6B6B6B"
-                    strokeWidth="1.4"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-                <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-                  <circle cx="7.5" cy="7" r="3" stroke="#FFFFFF" strokeWidth="1.5" />
-                  <path
-                    d="M2 16.5 C2 13.5 4.5 12 7.5 12 C10.5 12 13 13.5 13 16.5"
-                    stroke="#FFFFFF"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                  />
-                  <path
-                    d="M13 4.2 A2.8 2.8 0 0 1 13 9.8 M15 12.3 C16.8 12.9 18 14.3 18 16.5"
-                    stroke="#FFFFFF"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                  />
-                </svg>
-                Crew
-              </button>
-
-              {crew.length > 0 ? (
-                crew.map((member) => (
-                  <button
-                    key={member.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedAstroId(member.id === selectedAstroId ? "" : member.id);
-                    }}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      height: "32px",
-                      padding: "0 8px 0 56px",
-                      borderRadius: "8px",
-                      color: selectedAstroId === member.id ? "#7DD3FC" : "#FFFFFF",
-                      background:
-                        selectedAstroId === member.id ? "rgba(255,255,255,0.06)" : "transparent",
-                      border: "none",
-                      cursor: "pointer",
-                      textAlign: "left",
-                      width: "100%",
-                    }}
-                  >
-                    <span
-                      style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                    >
-                      {member.id}
-                    </span>
-                  </button>
-                ))
-              ) : (
-                <span
+              {leadProfile?.is_lead && (
+                <button
+                  type="button"
+                  onClick={() => setActiveScreen("crew")}
                   style={{
-                    padding: "4px 8px 4px 56px",
-                    fontSize: "12px",
-                    color: "#6B6B6B",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "8px",
+                    height: "36px",
+                    padding: "0 8px 0 28px",
+                    borderRadius: "8px",
+                    color: "#FFFFFF",
+                    border: "none",
+                    cursor: "pointer",
+                    width: "100%",
+                    textAlign: "left",
+                    whiteSpace: "nowrap",
+                    background: activeScreen === "crew" ? "rgba(255,255,255,0.1)" : "transparent",
                   }}
                 >
-                  No crew logged
-                </span>
+                  <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+                    <circle cx="7.5" cy="7" r="3" stroke="#FFFFFF" strokeWidth="1.5" />
+                    <path
+                      d="M2 16.5 C2 13.5 4.5 12 7.5 12 C10.5 12 13 13.5 13 16.5"
+                      stroke="#FFFFFF"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                    />
+                    <path
+                      d="M13 4.2 A2.8 2.8 0 0 1 13 9.8 M15 12.3 C16.8 12.9 18 14.3 18 16.5"
+                      stroke="#FFFFFF"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                  <span style={{ flex: 1 }}>Manage Crew</span>
+                  <span
+                    style={{
+                      fontSize: "10px",
+                      padding: "2px 6px",
+                      borderRadius: "4px",
+                      background: "#7DD3FC",
+                      color: "#1C1C1C",
+                      fontWeight: 700,
+                    }}
+                  >
+                    LEAD
+                  </span>
+                </button>
               )}
 
               <button
@@ -1029,107 +1147,77 @@ export default function AegisBioApp() {
                 <path d="M12 4 V16" stroke="#FFFFFF" strokeWidth="1.5" />
               </svg>
             </button>
+
+            {/* Station User Authentication Status & Sign Out */}
+            {leadProfile ? (
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "6px",
+                    height: "32px",
+                    padding: "0 10px",
+                    borderRadius: "8px",
+                    background: "rgba(125,211,252,0.12)",
+                    border: "1px solid rgba(125,211,252,0.3)",
+                    fontSize: "12px",
+                    color: "#7DD3FC",
+                  }}
+                >
+                  <span>🧑‍🚀</span>
+                  <span style={{ fontWeight: 600 }}>{leadProfile.callsign || leadProfile.username}</span>
+                  <span style={{ color: "#A3A3A3", fontSize: "11px" }}>({leadProfile.crew_name})</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSignOut}
+                  title="Sign Out of Station Console"
+                  style={{
+                    height: "32px",
+                    padding: "0 12px",
+                    borderRadius: "8px",
+                    border: "1px solid #444444",
+                    background: "#282828",
+                    color: "#EF4444",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "4px",
+                  }}
+                >
+                  Sign Out
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setIsAuthModalOpen(true)}
+                style={{
+                  height: "32px",
+                  padding: "0 12px",
+                  borderRadius: "8px",
+                  border: "1px solid #7DD3FC",
+                  background: "transparent",
+                  color: "#7DD3FC",
+                  fontSize: "12px",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "6px",
+                }}
+              >
+                🔑 Station Login
+              </button>
+            )}
           </div>
         </header>
 
         {/* Main Screen Container */}
         <main style={{ display: "flex", flexDirection: "column", gap: "28px", padding: "28px" }}>
-          {/* Active Alert Banner */}
-          {activeAlert && !activeAlert.acknowledged && (
-            <div
-              role="alert"
-              style={{
-                width: "100%",
-                boxSizing: "border-box",
-                display: "flex",
-                flexWrap: "wrap",
-                alignItems: "center",
-                gap: "12px 16px",
-                padding: "12px 12px 12px 16px",
-                borderRadius: "16px",
-                background: "#3B2323",
-                border: "1px solid #EF4444",
-                color: "#FFFFFF",
-              }}
-            >
-              <span
-                style={{
-                  width: "40px",
-                  height: "40px",
-                  flexShrink: 0,
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  borderRadius: "12px",
-                  background: "#EF4444",
-                }}
-              >
-                <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
-                  <path d="M10 1 L19 10 L10 19 L1 10 Z" fill="#1C1C1C" />
-                  <rect x="9" y="5.5" width="2" height="6" rx="1" fill="#EF4444" />
-                  <rect x="9" y="13" width="2" height="2" rx="1" fill="#EF4444" />
-                </svg>
-              </span>
-              <div style={{ flex: "999 1 280px", display: "flex", flexDirection: "column" }}>
-                <span style={{ fontWeight: 600 }}>
-                  Crew warning · {activeAlert.astronaut_id}, {activeAlert.hazard_origin}
-                </span>
-                <span
-                  style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    fontSize: "12px",
-                    lineHeight: "16px",
-                    color: "#FCA5A5",
-                  }}
-                >
-                  {activeAlert.status === "SWITCHED_TO_EMERGENCY_CONTACT"
-                    ? `Escalated to ${activeAlert.emergency_contact_callsign || "Emergency Contact"}`
-                    : `Owner timeout: ${activeAlert.remaining_seconds ?? activeAlert.timeout_seconds}s · Emergency Contact: ${
-                        activeAlert.emergency_contact_callsign || "CREW-MED"
-                      }`}
-                </span>
-              </div>
-              <div style={{ flex: "1 1 auto", display: "flex", justifyContent: "flex-end", gap: "8px" }}>
-                <button
-                  type="button"
-                  onClick={() => handleAnswerAsOwner(activeAlert.alert_id)}
-                  style={{
-                    height: "44px",
-                    padding: "0 16px",
-                    borderRadius: "8px",
-                    border: "1px solid #F87171",
-                    background: "transparent",
-                    color: "#FFFFFF",
-                    fontSize: "14px",
-                    fontWeight: 500,
-                    cursor: "pointer",
-                  }}
-                >
-                  Silence tone (I am OK)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setActiveScreen("alerts")}
-                  style={{
-                    height: "44px",
-                    display: "inline-flex",
-                    alignItems: "center",
-                    padding: "0 16px",
-                    borderRadius: "8px",
-                    border: "none",
-                    background: "#EF4444",
-                    color: "#1C1C1C",
-                    fontSize: "14px",
-                    fontWeight: 600,
-                    cursor: "pointer",
-                  }}
-                >
-                  Go to Alert
-                </button>
-              </div>
-            </div>
-          )}
-
           {/* =================================================================
               SCREEN 1: OVERVIEW
           ================================================================= */}
@@ -3822,6 +3910,250 @@ export default function AegisBioApp() {
         currentMissionDay={latestMetrics?.mission_day || 1}
         previousMetrics={latestMetrics}
       />
+
+      {/* Quick Station Key Login Modal */}
+      {isAuthModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0, 0, 0, 0.75)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 9999,
+            padding: "20px",
+          }}
+        >
+          <div
+            style={{
+              width: "100%",
+              maxWidth: "460px",
+              background: "#1C1C1C",
+              border: "1px solid #333333",
+              borderRadius: "16px",
+              padding: "28px",
+              display: "flex",
+              flexDirection: "column",
+              gap: "20px",
+              boxShadow: "0 20px 40px rgba(0, 0, 0, 0.6)",
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                <span style={{ fontSize: "20px" }}>🔑</span>
+                <div>
+                  <h3 style={{ margin: 0, fontSize: "16px", fontWeight: 600, color: "#FFFFFF" }}>
+                    {leadAuthMode === "login" ? "Station Key Authentication" : "Register Station Crew Lead"}
+                  </h3>
+                  <p style={{ margin: "2px 0 0", fontSize: "12px", color: "#A3A3A3" }}>
+                    Username and secret access key (no passwords/emails).
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAuthModalOpen(false)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "#A3A3A3",
+                  fontSize: "18px",
+                  cursor: "pointer",
+                  padding: "4px 8px",
+                }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ display: "flex", gap: "8px", background: "#282828", padding: "4px", borderRadius: "8px" }}>
+              <button
+                type="button"
+                onClick={() => setLeadAuthMode("login")}
+                style={{
+                  flex: 1,
+                  padding: "6px 12px",
+                  borderRadius: "6px",
+                  border: "none",
+                  background: leadAuthMode === "login" ? "#7DD3FC" : "transparent",
+                  color: leadAuthMode === "login" ? "#1C1C1C" : "#A3A3A3",
+                  fontWeight: 600,
+                  fontSize: "12px",
+                  cursor: "pointer",
+                }}
+              >
+                Sign In
+              </button>
+              <button
+                type="button"
+                onClick={() => setLeadAuthMode("register")}
+                style={{
+                  flex: 1,
+                  padding: "6px 12px",
+                  borderRadius: "6px",
+                  border: "none",
+                  background: leadAuthMode === "register" ? "#7DD3FC" : "transparent",
+                  color: leadAuthMode === "register" ? "#1C1C1C" : "#A3A3A3",
+                  fontWeight: 600,
+                  fontSize: "12px",
+                  cursor: "pointer",
+                }}
+              >
+                Register Lead
+              </button>
+            </div>
+
+            {leadAuthMode === "login" ? (
+              <form onSubmit={handleLeadLogin} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
+                <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <span style={{ fontSize: "12px", color: "#A3A3A3" }}>Username</span>
+                  <input
+                    type="text"
+                    required
+                    value={leadLoginForm.username}
+                    onChange={(e) => setLeadLoginForm({ ...leadLoginForm, username: e.target.value })}
+                    style={{
+                      height: "38px",
+                      padding: "0 12px",
+                      borderRadius: "8px",
+                      border: "1px solid #333333",
+                      background: "#282828",
+                      color: "#FFFFFF",
+                    }}
+                  />
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <span style={{ fontSize: "12px", color: "#A3A3A3" }}>Station Key</span>
+                  <input
+                    type="password"
+                    required
+                    value={leadLoginForm.key}
+                    onChange={(e) => setLeadLoginForm({ ...leadLoginForm, key: e.target.value })}
+                    style={{
+                      height: "38px",
+                      padding: "0 12px",
+                      borderRadius: "8px",
+                      border: "1px solid #333333",
+                      background: "#282828",
+                      color: "#FFFFFF",
+                    }}
+                  />
+                </label>
+                <button
+                  type="submit"
+                  style={{
+                    height: "40px",
+                    borderRadius: "8px",
+                    border: "none",
+                    background: "#7DD3FC",
+                    color: "#1C1C1C",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    fontSize: "13px",
+                  }}
+                >
+                  Authenticate Station Access
+                </button>
+              </form>
+            ) : (
+              <form onSubmit={handleLeadRegister} style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+                <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <span style={{ fontSize: "12px", color: "#A3A3A3" }}>Station Name</span>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Hermes Lunar Orbit"
+                    value={leadRegisterForm.station_name}
+                    onChange={(e) => setLeadRegisterForm({ ...leadRegisterForm, station_name: e.target.value })}
+                    style={{
+                      height: "36px",
+                      padding: "0 12px",
+                      borderRadius: "8px",
+                      border: "1px solid #333333",
+                      background: "#282828",
+                      color: "#FFFFFF",
+                    }}
+                  />
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <span style={{ fontSize: "12px", color: "#A3A3A3" }}>Crew Division Name</span>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Crew-Alpha"
+                    value={leadRegisterForm.crew_name}
+                    onChange={(e) => setLeadRegisterForm({ ...leadRegisterForm, crew_name: e.target.value })}
+                    style={{
+                      height: "36px",
+                      padding: "0 12px",
+                      borderRadius: "8px",
+                      border: "1px solid #333333",
+                      background: "#282828",
+                      color: "#FFFFFF",
+                    }}
+                  />
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <span style={{ fontSize: "12px", color: "#A3A3A3" }}>Lead Username</span>
+                  <input
+                    type="text"
+                    required
+                    value={leadRegisterForm.username}
+                    onChange={(e) => setLeadRegisterForm({ ...leadRegisterForm, username: e.target.value })}
+                    style={{
+                      height: "36px",
+                      padding: "0 12px",
+                      borderRadius: "8px",
+                      border: "1px solid #333333",
+                      background: "#282828",
+                      color: "#FFFFFF",
+                    }}
+                  />
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                  <span style={{ fontSize: "12px", color: "#A3A3A3" }}>Station Secret Key</span>
+                  <input
+                    type="password"
+                    required
+                    value={leadRegisterForm.key}
+                    onChange={(e) => setLeadRegisterForm({ ...leadRegisterForm, key: e.target.value })}
+                    style={{
+                      height: "36px",
+                      padding: "0 12px",
+                      borderRadius: "8px",
+                      border: "1px solid #333333",
+                      background: "#282828",
+                      color: "#FFFFFF",
+                    }}
+                  />
+                </label>
+                <button
+                  type="submit"
+                  style={{
+                    height: "40px",
+                    borderRadius: "8px",
+                    border: "none",
+                    background: "#7DD3FC",
+                    color: "#1C1C1C",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    fontSize: "13px",
+                  }}
+                >
+                  Establish Station &amp; Crew
+                </button>
+              </form>
+            )}
+
+            {leadFeedback && (
+              <span style={{ fontSize: "12px", color: "#96E2D6", textAlign: "center" }}>{leadFeedback}</span>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

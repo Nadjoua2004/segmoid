@@ -6,7 +6,7 @@ Connected to both SQLite and Supabase operational tables, with zero dummy data.
 import json
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, BackgroundTasks
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -15,6 +15,8 @@ from app.schemas import HealthMetrics, HealthMetricsResponse
 from app.api.triage import evaluate_multi_hazard_triage
 from app.services.metric_classifier import metric_classifier
 from app.services.alarm_service import get_astronaut_contact_info, sync_to_supabase_escalation
+from app.services.health_predictor_agent import run_agent_background_prediction
+from app.services.auth_service import get_optional_current_user
 
 router = APIRouter(prefix="/api/metrics", tags=["Physiological Telemetry"])
 
@@ -118,26 +120,34 @@ def _sync_ingest_to_supabase(entry: TelemetryLog, triage_status: str, primary_ha
 
 
 @router.get("/crew")
-def get_active_crew_summary(db: Session = Depends(get_db)) -> Dict[str, Any]:
+def get_active_crew_summary(
+    db: Session = Depends(get_db),
+    current_user: Optional[UserModel] = Depends(get_optional_current_user),
+) -> Dict[str, Any]:
     """
-    Returns only the crew members that actually exist in the database (from logged telemetry or registered users),
-    along with their per-vital range statuses (HR, SpO2, Sleep, Temp, Dose) for the reference Crew panel.
+    Returns only the crew members that actually exist in the database UserModel table.
+    If authenticated, returns members of the astronaut's crew (strict crew isolation).
     """
-    users = {u.callsign: u for u in db.query(UserModel).all()}
-    logs = db.query(TelemetryLog).order_by(TelemetryLog.mission_day.asc(), TelemetryLog.id.asc()).all()
+    query = db.query(UserModel).filter(UserModel.is_active == True)
+    if current_user and current_user.crew_name:
+        query = query.filter(UserModel.crew_name == current_user.crew_name)
 
-    latest_by_astro: Dict[str, TelemetryLog] = {}
-    for row in logs:
-        latest_by_astro[row.astronaut_id] = row
+    registered_users = query.all()
+    if not registered_users:
+        registered_users = db.query(UserModel).filter(UserModel.is_active == True).all()
 
-    all_ids = sorted(set(list(users.keys()) + list(latest_by_astro.keys())))
     crew_list = []
-
-    for astro_id in all_ids:
-        u = users.get(astro_id)
-        latest = latest_by_astro.get(astro_id)
-        name = u.full_name if u else astro_id
-        role = u.role if u else "Crew Member"
+    for u in registered_users:
+        astro_id = u.callsign or u.username
+        # Look up latest telemetry for this astronaut
+        latest = (
+            db.query(TelemetryLog)
+            .filter((TelemetryLog.astronaut_id == astro_id) | (TelemetryLog.astronaut_id == u.username))
+            .order_by(TelemetryLog.mission_day.desc(), TelemetryLog.id.desc())
+            .first()
+        )
+        name = u.callsign or u.username
+        role = u.crew_name or "Crew Member"
 
         if latest:
             report = metric_classifier.evaluate_all_metrics(
@@ -173,8 +183,8 @@ def get_active_crew_summary(db: Session = Depends(get_db)) -> Dict[str, Any]:
                 "status": overall,
                 "vitals_bars": vitals_bars,
                 "has_telemetry": latest is not None,
-                "emergency_contact_callsign": u.emergency_contact_callsign if u else "CREW-MED",
-                "emergency_contact_name": u.emergency_contact_name if u else "Crew Medical Officer",
+                "emergency_contact_callsign": getattr(u, "emergency_contact_callsign", None) or "CREW-MED",
+                "emergency_contact_name": getattr(u, "emergency_contact_name", None) or "Crew Medical Officer",
             }
         )
 
@@ -213,6 +223,7 @@ def get_latest_metrics(
 @router.post("/ingest", response_model=HealthMetricsResponse)
 def ingest_health_metrics(
     payload: HealthMetrics,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     """
@@ -288,6 +299,10 @@ def ingest_health_metrics(
             )
 
     _sync_ingest_to_supabase(new_entry, triage.overall_status, primary_hazard)
+
+    # Trigger autonomous background predictive surveillance cycle
+    background_tasks.add_task(run_agent_background_prediction, new_entry.astronaut_id)
+
     return new_entry
 
 

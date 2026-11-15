@@ -88,80 +88,20 @@ def get_optional_current_user(
     return db.query(UserModel).filter(UserModel.username == username).first()
 
 def seed_default_users_if_empty(db: Session):
-    """Ensure baseline station crews and lead astronauts exist."""
+    """Ensure baseline station crew lead exists (only the lead in DB, no mock members)."""
     if db.query(UserModel).count() > 0:
         return
 
-    default_users = [
-        # CREW A (Station: LUNAR-BASE-ALPHA)
-        {
-            "username": "cmdr_vance",
-            "key": "Key1234!",
-            "callsign": "ASTRO-01",
-            "crew_name": "CREW-A",
-            "station_name": "LUNAR-BASE-ALPHA",
-            "is_lead": True,
-            "alert_timeout_seconds": 60,
-        },
-        {
-            "username": "dr_chen",
-            "key": "Key1234!",
-            "callsign": "ASTRO-02",
-            "crew_name": "CREW-A",
-            "station_name": "LUNAR-BASE-ALPHA",
-            "is_lead": False,
-            "alert_timeout_seconds": 60,
-        },
-        {
-            "username": "eng_kowalski",
-            "key": "Key1234!",
-            "callsign": "ASTRO-03",
-            "crew_name": "CREW-A",
-            "station_name": "LUNAR-BASE-ALPHA",
-            "is_lead": False,
-            "alert_timeout_seconds": 60,
-        },
-        {
-            "username": "helena_astro",
-            "key": "Key1234!",
-            "callsign": "ASTRO-7702-HELENA",
-            "crew_name": "CREW-A",
-            "station_name": "LUNAR-BASE-ALPHA",
-            "is_lead": False,
-            "alert_timeout_seconds": 60,
-        },
-        # CREW B (Separate Crew on Station to test crew-isolation routing)
-        {
-            "username": "lead_okafor",
-            "key": "Key1234!",
-            "callsign": "ASTRO-05",
-            "crew_name": "CREW-B",
-            "station_name": "LUNAR-BASE-ALPHA",
-            "is_lead": True,
-            "alert_timeout_seconds": 60,
-        },
-        {
-            "username": "astro_lindqvist",
-            "key": "Key1234!",
-            "callsign": "ASTRO-06",
-            "crew_name": "CREW-B",
-            "station_name": "LUNAR-BASE-ALPHA",
-            "is_lead": False,
-            "alert_timeout_seconds": 60,
-        },
-    ]
-
-    for u in default_users:
-        user_record = UserModel(
-            username=u["username"],
-            email=f"{u['username']}@{u['crew_name'].lower()}.station.local",
-            hashed_password=hash_password(u["key"]),
-            callsign=u["callsign"],
-            crew_name=u["crew_name"],
-            station_name=u["station_name"],
-            is_lead=u["is_lead"],
-            alert_timeout_seconds=u["alert_timeout_seconds"],
-            is_active=True
-        )
-        db.add(user_record)
+    lead_user = UserModel(
+        username="lead",
+        email="lead@station.local",
+        hashed_password=hash_password("Key1234!"),
+        callsign="LEAD-COMMANDER",
+        crew_name="ARTEMIS-CREW",
+        station_name="LUNAR-BASE-ALPHA",
+        is_lead=True,
+        is_active=True,
+        alert_timeout_seconds=60,
+    )
+    db.add(lead_user)
     db.commit()

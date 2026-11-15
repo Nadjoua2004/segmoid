@@ -252,3 +252,65 @@ class HealthPredictorAgent:
         }
 
 health_predictor_agent = HealthPredictorAgent()
+
+def run_agent_background_prediction(astronaut_id: str):
+    """
+    Autonomous background predictive surveillance agent.
+    Runs multi-scale Time-Series forecasting across DAILY, WEEKLY, and MONTHLY horizons.
+    If dangerous physiological strain is projected, it evaluates escalation protocols and warns the crew.
+    """
+    from app.database import SessionLocal
+    from app.models import TelemetryLog
+    from app.services.predictor import calculate_trajectory_forecast
+    from app.services.alarm_service import alarm_service
+
+    db = SessionLocal()
+    try:
+        records = db.query(TelemetryLog).filter(
+            TelemetryLog.astronaut_id == astronaut_id
+        ).order_by(TelemetryLog.mission_day.asc()).all()
+        
+        if not records:
+            return
+
+        hist_dicts = [
+            {
+                "mission_day": r.mission_day,
+                "heart_rate": r.heart_rate,
+                "spo2": r.spo2,
+                "sleep_hours": r.sleep_hours,
+                "radiation_msv": r.radiation_msv,
+                "core_temp_c": r.core_temp_c or 36.8,
+                "hrv_rmssd": r.hrv_rmssd or 45.0,
+                "blood_glucose": r.blood_glucose or 90.0,
+            }
+            for r in records
+        ]
+
+        # 1. Run Weekly Tactical Forecast
+        weekly_pred = calculate_trajectory_forecast(
+            hist_dicts, astronaut_id=astronaut_id, horizon_days=7, time_scale="WEEKLY"
+        )
+        
+        # 2. Run Daily Intra-Sol Circadian Forecast
+        daily_pred = calculate_trajectory_forecast(
+            hist_dicts, astronaut_id=astronaut_id, horizon_days=24, time_scale="DAILY"
+        )
+
+        # 3. Check for projected critical deterioration
+        if weekly_pred.alert_triggered or (weekly_pred.cardiovascular_strain_score and weekly_pred.cardiovascular_strain_score > 70):
+            print(f"[HealthPredictorAgent Background] ⚠️ Critical strain predicted for {astronaut_id} in weekly horizon!")
+            alarm_service.trigger_alarm(
+                db,
+                astronaut_id=astronaut_id,
+                severity="CRITICAL",
+                message=f"Autonomous Agent Forecast Alert: Predicted critical cardiovascular strain ({weekly_pred.primary_strain_indicator}) within 7-day tactical window.",
+                source="AGENT_BACKGROUND_FORECASTER",
+                actions=[weekly_pred.recommended_countermeasure] if weekly_pred.recommended_countermeasure else None
+            )
+
+        print(f"[HealthPredictorAgent Background] Autonomous forecast completed for {astronaut_id} (Weekly CSI: {weekly_pred.cardiovascular_strain_score:.1f})")
+    except Exception as e:
+        print(f"[HealthPredictorAgent Background Error] Failed background prediction: {e}")
+    finally:
+        db.close()

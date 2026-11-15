@@ -47,7 +47,7 @@ def query_flight_surgeon(payload: ChatQuery, db: Session = Depends(get_db)):
     db.add(user_record)
 
     # Generate response
-    result = ai_agent_service.answer_query(payload.query, context_vitals)
+    result = ai_agent_service.answer_query(payload.query, context_vitals, payload.astronaut_id)
 
     # Record assistant message
     asst_record = ChatHistoryModel(

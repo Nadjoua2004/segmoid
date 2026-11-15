@@ -129,7 +129,8 @@ class TrajectoryPoint(BaseModel):
     upper_ci_heart_rate: Optional[float] = None
 
 class PredictionResult(BaseModel):
-    astronaut_id: str
+    model_config = {"protected_namespaces": ()}
+    astronaut_id: Optional[str] = "ALL_CREW"
     time_scale: str = Field(default="WEEKLY", description="DAILY (24h), WEEKLY (7d), or MONTHLY (30d)")
     forecast_horizon_days: int = 7
     horizon_steps: int = 7
