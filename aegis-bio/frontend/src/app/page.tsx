@@ -15,6 +15,9 @@ import { SYMPTOMS, GLUCOSE_CONTEXT, RATINGS } from "@/lib/healthIndicators";
 import { DailyCheckInModal } from "@/components/DailyCheckInModal";
 import { StationLoginPage } from "@/components/StationLoginPage";
 import { HologramModel3D } from "@/components/HologramModel3D";
+import { GuidedTour, type TourStep } from "@/components/GuidedTour";
+import { TourWelcome } from "@/components/TourWelcome";
+import { HelpCircle } from "lucide-react";
 import {
   Button,
   EmptyState,
@@ -39,6 +42,9 @@ const VITAL_RANGES = {
 } as const;
 
 const VITAL_LABELS = ["Heart rate", "SpO₂", "Sleep", "Core temp", "Radiation dose"] as const;
+
+/** Bump the version to show the tour again to everyone after it changes. */
+const TOUR_STORAGE_KEY = "aegis-bio:tour-done:v3";
 
 type ScreenId = "overview" | "daily-checkin" | "crew" | "hazards" | "alerts" | "thresholds";
 
@@ -165,6 +171,20 @@ export default function AegisBioApp() {
   const [leadFeedback, setLeadFeedback] = useState<string>("");
   const [isModalCheckInOpen, setIsModalCheckInOpen] = useState<boolean>(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const [isTourOpen, setIsTourOpen] = useState<boolean>(false);
+  const [isTourWelcomeOpen, setIsTourWelcomeOpen] = useState<boolean>(false);
+
+  // First time someone reaches the dashboard: ask whether they want the guided tour.
+  useEffect(() => {
+    if (!leadToken) return;
+    try {
+      if (localStorage.getItem(TOUR_STORAGE_KEY) === "1") return;
+    } catch {
+      // storage blocked: still offer the tour
+    }
+    const t = setTimeout(() => setIsTourWelcomeOpen(true), 800);
+    return () => clearTimeout(t);
+  }, [leadToken]);
   const [justCheckedInAstroIds, setJustCheckedInAstroIds] = useState<string[]>([]);
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
 
@@ -1109,6 +1129,217 @@ Classifier results are ready. What is your clinical evaluation, what specific co
     );
   }
 
+  // Finished, closed or skipped: don't offer the tour automatically again on this device.
+  const markTourSeen = () => {
+    try {
+      localStorage.setItem(TOUR_STORAGE_KEY, "1");
+    } catch {
+      // ignore
+    }
+  };
+
+  const startTour = () => {
+    setIsTourWelcomeOpen(false);
+    setIsModalCheckInOpen(false);
+    setIsTourOpen(true);
+  };
+
+  const skipTour = () => {
+    setIsTourWelcomeOpen(false);
+    markTourSeen();
+  };
+
+  const handleTourClose = () => {
+    setIsTourOpen(false);
+    setIsModalCheckInOpen(false); // the tour may have opened the form or the chat to show them
+    setIsChatOpen(false);
+    markTourSeen();
+  };
+
+  // Each step sets up the UI it needs, so the tour also works when stepping backwards.
+  const showPage = () => {
+    setIsModalCheckInOpen(false);
+    setIsChatOpen(false);
+  };
+  const showNav = () => {
+    showPage();
+    setShowLeftNav(true);
+  };
+  const showOverview = () => {
+    showPage();
+    setActiveScreen("overview");
+  };
+  const showForm = () => {
+    setIsChatOpen(false);
+    setIsModalCheckInOpen(true);
+  };
+  const showChat = () => {
+    setIsModalCheckInOpen(false);
+    setIsChatExpanded(false);
+    setIsChatOpen(true);
+  };
+  const tourSteps: TourStep[] = [
+    {
+      target: '[data-tour="nav"]',
+      title: "Navigation",
+      description:
+        "Move between the main screens here. You can hide this sidebar with the panel button at the top left.",
+      placement: "right",
+      before: showNav,
+    },
+    {
+      target: '[data-tour="nav-checkin"]',
+      title: "Daily check-in",
+      description:
+        "Log your vitals, sleep, exercise, nutrition and symptoms once a day. The AI assessment uses it to spot health risks early.",
+      placement: "right",
+      before: showNav,
+    },
+    ...(leadProfile?.is_lead
+      ? [
+          {
+            target: '[data-tour="nav-crew"]',
+            title: "Manage crew (admin only)",
+            description:
+              "Only the crew lead sees this. Add crew members, give them station keys, and see who has checked in today.",
+            placement: "right" as const,
+            before: showNav,
+          },
+        ]
+      : []),
+    {
+      target: '[data-tour="nav-alerts"]',
+      title: "Alerts",
+      description:
+        "Every medical alert raised for you or your crew. The red badge counts alerts still waiting to be acknowledged.",
+      placement: "right",
+      before: showNav,
+    },
+    {
+      target: '[data-tour="log-checkin"]',
+      title: "Log today\u2019s check-in",
+      description: "The quickest way to start your daily check-in from the Overview.",
+      placement: "bottom",
+      before: showOverview,
+    },
+    {
+      target: 'section[aria-label="3D Astronaut Biometric Hologram"]',
+      title: "Body status model",
+      description:
+        "A 3D view of your latest readings. Its colour follows your overall status: nominal, watch or critical.",
+      placement: "right",
+      before: showOverview,
+    },
+    {
+      target: '[data-tour="trend"]',
+      title: "Vital trends",
+      description: "Follow SpO\u2082, heart rate and sleep across your recent readings. Switch metric with the tabs.",
+      placement: "right",
+      before: showOverview,
+    },
+    {
+      target: '[data-tour="forecast"]',
+      title: "Health forecast",
+      description:
+        "Projects where your vitals are heading over the next day, week or month, with predicted risks and countermeasures.",
+      placement: "top",
+      before: showOverview,
+    },
+    {
+      target: '[data-tour="refresh"]',
+      title: "Refresh data",
+      description: "Reload the latest readings from the station server.",
+      placement: "bottom",
+      before: showPage,
+    },
+    {
+      target: '[data-tour="notifications"]',
+      title: "Notifications",
+      description:
+        "Opens the side panel with check-in reminders, active alarms and crew status. The badge counts what needs your attention.",
+      placement: "bottom",
+      before: showPage,
+    },
+    // --- The daily check-in form (general overview, not field by field) ---
+    {
+      target: '[data-tour="checkin-title"]',
+      title: "The daily check-in form",
+      description:
+        "This is the form you fill in once a day. It takes about 6 minutes and keeps your health record up to date.",
+      placement: "bottom",
+      before: showForm,
+    },
+    {
+      target: '[data-tour="checkin-progress"]',
+      title: "Six short sections",
+      description:
+        "Vitals, sleep, activity, environment and symptoms, then a final review. The bar shows where you are; tap a section to jump to it.",
+      placement: "bottom",
+      before: showForm,
+    },
+    {
+      target: '[data-tour="checkin-body"]',
+      title: "Answer each section",
+      description:
+        "Every question is required. As you enter readings, each one is marked Nominal, Watch or Critical so problems stand out straight away.",
+      placement: "auto",
+      before: showForm,
+    },
+    {
+      target: '[data-tour="checkin-footer"]',
+      title: "Move on and submit",
+      description:
+        "Use Back and Next to move between sections. Your draft is saved on this device, so you can stop and finish later. After the review, submit to get an AI health assessment.",
+      placement: "top",
+      before: showForm,
+    },
+    {
+      target: '[data-tour="chat"]',
+      title: "AstroDoc assistant",
+      description:
+        "Open the AI flight surgeon from this button, wherever you are in the app.",
+      placement: "left",
+      before: showPage,
+    },
+    // --- Inside the chat ---
+    {
+      target: '[data-tour="chat-messages"]',
+      title: "Your conversation",
+      description:
+        "AstroDoc answers here, using NASA health guidance and your latest vitals. Sources are listed under each answer.",
+      placement: "left",
+      before: showChat,
+    },
+    {
+      target: '[data-tour="chat-input"]',
+      title: "Ask a question",
+      description: "Type a question, for example \u201cMy SpO\u2082 is 93%, what should I do?\u201d, then press Send.",
+      placement: "top",
+      before: showChat,
+    },
+    {
+      target: '[data-tour="chat-voice"]',
+      title: "Ask by voice",
+      description: "Tap the microphone and speak, then tap \u25a0 to send. Handy when your hands are busy.",
+      placement: "top",
+      before: showChat,
+    },
+    {
+      target: '[data-tour="chat-controls"]',
+      title: "Expand or close",
+      description: "Expand the chat for longer answers. Closing it clears the conversation.",
+      placement: "left",
+      before: showChat,
+    },
+    {
+      target: '[data-tour="tour-help"]',
+      title: "Replay this tour",
+      description: "Click here any time to see this guide again.",
+      placement: "bottom",
+      before: showPage,
+    },
+  ];
+
   return (
     <div
       style={{
@@ -1141,6 +1372,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
           }}
         >
           <nav
+            data-tour="nav"
             aria-label="Main"
             style={{
               width: "100%",
@@ -1262,6 +1494,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
 
               <button
                 type="button"
+                data-tour="nav-checkin"
                 onClick={() => setActiveScreen("daily-checkin")}
                 style={{
                   display: "flex",
@@ -1303,6 +1536,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
               {leadProfile?.is_lead && (
                 <button
                   type="button"
+                  data-tour="nav-crew"
                   onClick={() => setActiveScreen("crew")}
                   style={{
                     display: "flex",
@@ -1359,6 +1593,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
 
               <button
                 type="button"
+                data-tour="nav-alerts"
                 onClick={() => setActiveScreen("alerts")}
                 style={{
                   display: "flex",
@@ -1472,7 +1707,31 @@ Classifier results are ready. What is your clinical evaluation, what specific co
           >
             <button
               type="button"
+              data-tour="tour-help"
+              onClick={startTour}
+              aria-label="Start guided tour"
+              title="Guided tour"
+              style={{
+                width: "36px",
+                height: "36px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                border: "none",
+                borderRadius: "8px",
+                background: "transparent",
+                cursor: "pointer",
+                color: "#FFFFFF",
+              }}
+            >
+              <HelpCircle size={20} strokeWidth={1.5} aria-hidden="true" />
+            </button>
+
+            <button
+              type="button"
+              data-tour="refresh"
               onClick={() => loadAllData()}
+              aria-label="Refresh from backend"
               title="Refresh from backend"
               style={{
                 width: "36px",
@@ -1511,6 +1770,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
 
             <button
               type="button"
+              data-tour="notifications"
               onClick={() => setShowRightPanel((v) => !v)}
               aria-label="Notifications"
               aria-expanded={showRightPanel}
@@ -1651,7 +1911,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                       : "No readings logged yet."}
                   </p>
                 </div>
-                <Button variant="primary" onClick={() => setActiveScreen("daily-checkin")}>
+                <Button variant="primary" data-tour="log-checkin" onClick={() => setActiveScreen("daily-checkin")}>
                   Log daily check-in
                 </Button>
               </header>
@@ -1679,7 +1939,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                     />
                   </div>
 
-                  <Panel aria-labelledby="trend-title">
+                  <Panel aria-labelledby="trend-title" data-tour="trend">
                     <PanelHeader
                       titleId="trend-title"
                       title="Trend"
@@ -2037,7 +2297,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
               </div>
 
               {/* Vital forecast (full-width below the 3-column biometric stage) */}
-              <Panel aria-labelledby="forecast-title" aria-busy={isLoadingForecast}>
+              <Panel aria-labelledby="forecast-title" aria-busy={isLoadingForecast} data-tour="forecast">
                 <PanelHeader
                   titleId="forecast-title"
                   title="Vital forecast"
@@ -4208,6 +4468,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
       {!isChatOpen && (
         <button
           type="button"
+          data-tour="chat"
           onClick={() => setIsChatOpen(true)}
           aria-label="Open AstroDoc AI Flight Surgeon"
           title="Open AstroDoc AI Flight Surgeon"
@@ -4308,7 +4569,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
               </div>
             </div>
 
-            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <div data-tour="chat-controls" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
               {/* Expand / Collapse Icon Button */}
               <button
                 type="button"
@@ -4384,6 +4645,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
 
           {/* Messages List */}
           <div
+            data-tour="chat-messages"
             style={{
               flex: 1,
               overflowY: "auto",
@@ -4451,6 +4713,8 @@ Classifier results are ready. What is your clinical evaluation, what specific co
           >
             <input
               type="text"
+              data-tour="chat-input"
+              aria-label="Message AstroDoc"
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
               placeholder={isRecording ? "Listening… click ■ to send" : "Ask AstroDoc..."}
@@ -4468,6 +4732,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
             />
             <button
               type="button"
+              data-tour="chat-voice"
               onClick={handleToggleRecording}
               disabled={isSendingChat && !isRecording}
               title={isRecording ? "Stop and send" : "Ask by voice"}
@@ -4508,6 +4773,9 @@ Classifier results are ready. What is your clinical evaluation, what specific co
       )}
 
       {/* Guided ISS-Grade Multi-Step Check-in Modal */}
+      <TourWelcome open={isTourWelcomeOpen} onAccept={startTour} onSkip={skipTour} />
+      <GuidedTour steps={tourSteps} open={isTourOpen} onClose={handleTourClose} />
+
       <DailyCheckInModal
         isOpen={isModalCheckInOpen}
         onClose={() => setIsModalCheckInOpen(false)}
