@@ -212,10 +212,13 @@ class AIAgentService:
         context_vitals: Optional[Dict[str, Any]] = None,
         astronaut_id: str = "ASTRO-01",
         history: Optional[List[Dict[str, str]]] = None,
+        use_report: bool = True,
     ) -> Dict[str, Any]:
         """
         Executes clinical flight surgeon reasoning loop over retrieved guidelines and astronaut vitals.
         Uses AstroDoc clinical model if available, with robust NASA HRP expert synthesis fallback.
+        use_report=False: the chat was opened directly (not from the daily check-in), so AstroDoc
+        answers from the question and its knowledge base without the check-in health report.
         """
         guidelines = self.retrieve_relevant_guidelines(query)
         sources = [f"{g['id']}: {g['title']} ({g['source']})" for g in guidelines]
@@ -226,19 +229,19 @@ class AIAgentService:
                 from astrodoc_app.assistant.contracts import ChatTurn
                 turns = [ChatTurn(role=h["role"], content=h["content"]) for h in (history or [])
                          if h.get("role") in ("user", "assistant") and h.get("content")]
-                res = self.astrodoc_bot.chat(astronaut_id, query, turns)
-                if (
-                    res
-                    and getattr(res, "reply", None)
-                    and "No knowledge-base passage matched" not in res.reply
-                    and len(res.reply.strip()) > 80
-                ):
+                res = self.astrodoc_bot.chat(astronaut_id, query, turns, use_report=use_report)
+                # AstroDoc's model and fixed replies are always used (short ones too, e.g. a greeting or
+                # "I've logged sleep 7 h"); only a weak offline answer falls back to the synthesis below.
+                weak_offline = getattr(res, "mode", "") == "offline" and (
+                    "No knowledge-base passage matched" in res.reply or len(res.reply.strip()) <= 80)
+                if res and getattr(res, "reply", None) and not weak_offline:
                     reply_text = res.reply
-                    # one entry per document (a card and a passage can share the same source)
+                    # one entry per document (a card and a passage can share the same source).
+                    # No keyword-matched fallback sources: AstroDoc only cites what passed its relevance check.
                     bot_cites = list(dict.fromkeys(c.title for c in (getattr(res, "citations", []) or [])))
                     return {
                         "answer": reply_text,
-                        "citations": bot_cites or sources,
+                        "citations": bot_cites,
                         "timestamp": datetime.utcnow().isoformat(),
                         "model": getattr(self.astrodoc_bot, "model", "AstroDoc Clinical AI")
                     }

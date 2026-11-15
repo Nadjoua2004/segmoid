@@ -114,6 +114,9 @@ export default function AegisBioApp() {
   // Floating Chatbot Dialog State
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
   const [isChatExpanded, setIsChatExpanded] = useState<boolean>(false);
+  // true while the chat was opened automatically after the daily check-in: AstroDoc then uses today's
+  // health report. Opened from the floating button it stays false (answers from the question + knowledge base).
+  const [chatUsesReport, setChatUsesReport] = useState<boolean>(false);
   const [chatInput, setChatInput] = useState<string>("");
   const [isSendingChat, setIsSendingChat] = useState<boolean>(false);
   const [chatError, setChatError] = useState<string>("");
@@ -481,9 +484,10 @@ export default function AegisBioApp() {
     prompt: string
   ) => {
     const chatOwner = myChatAstroId || astroId;
-    // 1. Immediately open and expand the chatbot interface
+    // 1. Immediately open and expand the chatbot interface (this chat uses the check-in report)
     setIsChatOpen(true);
     setIsChatExpanded(true);
+    setChatUsesReport(true);
 
     // 2. Append optimistic user turn so prompt appears immediately
     const userTurn: ChatHistoryItem = {
@@ -498,7 +502,7 @@ export default function AegisBioApp() {
 
     // 3. Query the flight surgeon model for clinical directives & what to do next
     try {
-      const reply = await api.queryFlightSurgeon(prompt, astroId);
+      const reply = await api.queryFlightSurgeon(prompt, astroId, true);
       const assistantTurn: ChatHistoryItem = {
         id: Date.now() + 1,
         astronaut_id: chatOwner,
@@ -723,7 +727,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
     setChatHistory((prev) => [...prev, tempUserMsg]);
 
     try {
-      const reply = await api.queryFlightSurgeon(q, chatOwner);
+      const reply = await api.queryFlightSurgeon(q, chatOwner, chatUsesReport);
       // Append to the current session only (no reload of the full saved history)
       setChatHistory((prev) => [
         ...prev,
@@ -753,6 +757,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
     }
     if (recordTimerRef.current) clearTimeout(recordTimerRef.current);
     setIsChatOpen(false);
+    setChatUsesReport(false); // the next chat opened from the floating button starts without the report
     setChatHistory([]);
     setChatError("");
     setChatInput("");
@@ -769,7 +774,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
         timestamp: new Date().toISOString() },
     ]);
     try {
-      const reply = await api.voiceQueryFlightSurgeon(blob, filename, chatOwner);
+      const reply = await api.voiceQueryFlightSurgeon(blob, filename, chatOwner, chatUsesReport);
       // Replace the placeholder with what was heard, then add the answer (current session only)
       setChatHistory((prev) => [
         ...prev.map((m) => (m.id === tempId ? { ...m, content: `🎤 ${reply.transcript || ""}` } : m)),
@@ -4304,6 +4309,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                 </div>
                 <div style={{ fontSize: "11px", color: "#94A3B8" }}>
                   NASA RAG Clinical Assistant{myChatAstroId ? ` · ${myChatAstroId}` : ""}
+                  {chatUsesReport ? " · using today's check-in" : ""}
                 </div>
               </div>
             </div>

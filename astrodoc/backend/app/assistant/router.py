@@ -41,13 +41,15 @@ def create_assistant_router(provider: AstroDataProvider, assistant: Optional[Ast
     @r.post("/chat", response_model=ChatResponse)
     def chat(req: ChatRequest):
         """Astronaut message -> {reply, citations[], logged[], countermeasures{}, ...}."""
-        return _guard(bot.chat, req.astronaut_id, req.message, req.history, offline=req.offline)
+        return _guard(bot.chat, req.astronaut_id, req.message, req.history, offline=req.offline,
+                      use_report=req.use_report)
 
     @r.post("/chat/voice", response_model=ChatResponse)
     def chat_voice(audio: UploadFile = File(..., description="Recorded speech (webm, ogg, wav, mp3, m4a...)"),
                    astronaut_id: str = Form(...),
                    history: str = Form("[]", description="JSON list of {role, content} turns"),
-                   offline: bool = Form(False)):
+                   offline: bool = Form(False),
+                   use_report: bool = Form(True, description="False when the chat was opened directly")):
         """Voice message: Whisper transcribes it, then it goes through the normal chat path
         (red flags, knowledge base, logging). The reply carries `transcript`."""
         try:
@@ -55,7 +57,7 @@ def create_assistant_router(provider: AstroDataProvider, assistant: Optional[Ast
         except (ValueError, TypeError) as e:
             raise HTTPException(status_code=422, detail=f"history must be a JSON list of turns ({e})")
         text = _transcribe(audio)
-        resp = _guard(bot.chat, astronaut_id, text, turns, offline=offline)
+        resp = _guard(bot.chat, astronaut_id, text, turns, offline=offline, use_report=use_report)
         resp.transcript = text
         return resp
 

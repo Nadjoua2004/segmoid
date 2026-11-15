@@ -116,7 +116,10 @@ def _answer_and_record(payload: ChatQuery, db: Session, current_user: Optional[U
     db.add(user_record)
 
     # Generate response scoped to this member
-    result = ai_agent_service.answer_query(payload.query, context_vitals, chat_owner, history=history)
+    # include_current_vitals=True only when the chat was opened automatically after the daily check-in;
+    # from the floating button it is False and AstroDoc answers without the health report.
+    result = ai_agent_service.answer_query(payload.query, context_vitals, chat_owner, history=history,
+                                           use_report=payload.include_current_vitals)
 
     # Record assistant message under this member's private thread only
     asst_record = ChatHistoryModel(
