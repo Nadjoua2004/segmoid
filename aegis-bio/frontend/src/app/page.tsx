@@ -123,6 +123,9 @@ export default function AegisBioApp() {
   // Voice input (MediaRecorder -> /api/chat/voice -> Whisper)
   const [isRecording, setIsRecording] = useState<boolean>(false);
   const recorderRef = useRef<MediaRecorder | null>(null);
+  // Photo attached to the next chat message (shrunk in the browser before upload)
+  const [chatPhoto, setChatPhoto] = useState<{ blob: Blob; url: string } | null>(null);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
   const recordTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Live Database State (Starts empty when database is empty)
@@ -702,9 +705,72 @@ Classifier results are ready. What is your clinical evaluation, what specific co
   };
 
   // Send query to AstroDoc AI Flight Surgeon (strictly scoped to signed-in member)
+  // Photo for AstroDoc: shrink to ~1024 px JPEG in the browser (small upload, fewer tokens, under the 3 MB limit)
+  const shrinkImage = (file: File, maxSide = 1024): Promise<Blob> =>
+    new Promise((resolve, reject) => {
+      const img = new Image();
+      const src = URL.createObjectURL(file);
+      img.onload = () => {
+        const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        canvas.getContext("2d")?.drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(src);
+        canvas.toBlob((b) => (b ? resolve(b) : reject(new Error("Could not read this image."))), "image/jpeg", 0.85);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(src);
+        reject(new Error("Could not read this image."));
+      };
+      img.src = src;
+    });
+
+  const handlePickPhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // picking the same file again still fires onChange
+    if (!file) return;
+    try {
+      const blob = await shrinkImage(file);
+      if (chatPhoto) URL.revokeObjectURL(chatPhoto.url);
+      setChatPhoto({ blob, url: URL.createObjectURL(blob) });
+      setChatError("");
+    } catch (err: any) {
+      setChatError(err.message || "Could not read this image.");
+    }
+  };
+
+  const clearChatPhoto = () => {
+    if (chatPhoto) URL.revokeObjectURL(chatPhoto.url);
+    setChatPhoto(null);
+  };
+
+  const sendPhotoChat = async (photo: { blob: Blob; url: string }, q: string, chatOwner: string) => {
+    const tempId = Date.now();
+    setChatPhoto(null); // the preview URL now belongs to the chat bubble
+    setChatHistory((prev) => [
+      ...prev,
+      { id: tempId, astronaut_id: chatOwner, role: "user", content: q, citations: [],
+        timestamp: new Date().toISOString(), image_url: photo.url },
+    ]);
+    try {
+      const reply = await api.photoQueryFlightSurgeon(photo.blob, q, chatOwner, chatUsesReport);
+      const note = reply.photo_readings?.length
+        ? `Read: ${reply.photo_readings.join(", ")}`
+        : reply.photo_description || "";
+      setChatHistory((prev) => [
+        ...prev.map((m) => (m.id === tempId ? { ...m, photo_note: note } : m)),
+        { id: tempId + 1, astronaut_id: chatOwner, role: "assistant", content: reply.content,
+          citations: reply.citations || [], timestamp: reply.timestamp || new Date().toISOString() },
+      ]);
+    } catch (err: any) {
+      setChatError(`Photo: ${err.message || "could not reach AstroDoc."} You can type the values instead.`);
+    }
+  };
+
   const handleSendChat = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!chatInput.trim() || isSendingChat) return;
+    if ((!chatInput.trim() && !chatPhoto) || isSendingChat) return;
     const chatOwner = myChatAstroId || selectedAstroId;
     if (!chatOwner) {
       setChatError("Sign in to chat with AstroDoc.");
@@ -714,6 +780,11 @@ Classifier results are ready. What is your clinical evaluation, what specific co
     setChatError("");
     const q = chatInput.trim();
     setChatInput("");
+    if (chatPhoto) {
+      await sendPhotoChat(chatPhoto, q, chatOwner);
+      setIsSendingChat(false);
+      return;
+    }
 
     // Optimistic append so user sees message immediately
     const tempUserMsg: ChatHistoryItem = {
@@ -758,6 +829,8 @@ Classifier results are ready. What is your clinical evaluation, what specific co
     if (recordTimerRef.current) clearTimeout(recordTimerRef.current);
     setIsChatOpen(false);
     setChatUsesReport(false); // the next chat opened from the floating button starts without the report
+    clearChatPhoto();
+    chatHistory.forEach((m) => m.image_url && URL.revokeObjectURL(m.image_url));
     setChatHistory([]);
     setChatError("");
     setChatInput("");
@@ -4416,7 +4489,21 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                     lineHeight: "19px",
                   }}
                 >
-                  <div style={{ whiteSpace: "pre-wrap" }}>{renderFormattedChatText(msg.content)}</div>
+                  {msg.image_url && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={msg.image_url}
+                      alt="Photo sent to AstroDoc"
+                      style={{ display: "block", maxWidth: "220px", maxHeight: "220px", borderRadius: "8px",
+                               marginBottom: msg.content ? "6px" : 0 }}
+                    />
+                  )}
+                  {msg.content && (
+                    <div style={{ whiteSpace: "pre-wrap" }}>{renderFormattedChatText(msg.content)}</div>
+                  )}
+                  {msg.photo_note && (
+                    <div style={{ marginTop: "6px", fontSize: "11px", color: "#94A3B8" }}>{msg.photo_note}</div>
+                  )}
                   {msg.citations && msg.citations.length > 0 && (
                     <div style={{ marginTop: "6px", fontSize: "11px", color: "#94A3B8" }}>
                       Refs: {msg.citations.join(" · ")}
@@ -4444,6 +4531,37 @@ Classifier results are ready. What is your clinical evaluation, what specific co
             )}
           </div>
 
+          {/* Attached photo, sent with the next message */}
+          {chatPhoto && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "10px",
+                padding: "8px 16px",
+                background: "#131720",
+                borderTop: "1px solid #232B3B",
+                fontSize: "12px",
+                color: "#94A3B8",
+              }}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={chatPhoto.url} alt="Attached photo" style={{ width: "44px", height: "44px",
+                   objectFit: "cover", borderRadius: "6px", border: "1px solid #232B3B" }} />
+              <span style={{ flex: 1 }}>Photo of a device display attached. Add a question or press Send.</span>
+              <button
+                type="button"
+                onClick={clearChatPhoto}
+                aria-label="Remove photo"
+                title="Remove photo"
+                style={{ border: "none", background: "transparent", color: "#A3A3A3", cursor: "pointer",
+                         fontSize: "14px" }}
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
           {/* Input Bar */}
           <form
             onSubmit={handleSendChat}
@@ -4459,7 +4577,8 @@ Classifier results are ready. What is your clinical evaluation, what specific co
               type="text"
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
-              placeholder={isRecording ? "Listening… click ■ to send" : "Ask AstroDoc..."}
+              placeholder={isRecording ? "Listening… click ■ to send"
+                : chatPhoto ? "Optional: ask about the photo…" : "Ask AstroDoc..."}
               style={{
                 flex: 1,
                 height: "38px",
@@ -4491,6 +4610,33 @@ Classifier results are ready. What is your clinical evaluation, what specific co
               }}
             >
               {isRecording ? "■" : "🎤"}
+            </button>
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp,image/*"
+              onChange={handlePickPhoto}
+              style={{ display: "none" }}
+            />
+            <button
+              type="button"
+              onClick={() => photoInputRef.current?.click()}
+              disabled={isSendingChat || isRecording}
+              title="Send a photo of a device display (pulse oximeter, BP monitor, thermometer, glucose meter)"
+              aria-label="Send a photo of a device display"
+              style={{
+                height: "38px",
+                minWidth: "42px",
+                padding: "0 10px",
+                borderRadius: "8px",
+                border: `1px solid ${chatPhoto ? "rgba(45, 212, 191, 0.5)" : "#232B3B"}`,
+                background: chatPhoto ? "rgba(45, 212, 191, 0.12)" : "#0C0E12",
+                color: "#F1F5F9",
+                fontSize: "14px",
+                cursor: "pointer",
+              }}
+            >
+              📷
             </button>
             <button
               type="submit"

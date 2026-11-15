@@ -211,6 +211,8 @@ export interface ChatMessage {
   timestamp?: string;
   citations?: string[];
   transcript?: string | null; // voice questions: what speech-to-text heard
+  photo_description?: string | null; // photo questions: what the vision model saw
+  photo_readings?: string[] | null; // values read from the photo (logged only after the astronaut says "yes")
 }
 
 export interface ProactiveChatPayload {

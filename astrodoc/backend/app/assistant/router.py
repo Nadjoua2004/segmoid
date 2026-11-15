@@ -15,6 +15,7 @@ from .contracts import AlertCrewRequest, ChatRequest, ChatResponse, ChatTurn, Co
 from .countermeasures import find_cards
 from .data_provider import AstroDataProvider
 from .stt import MAX_AUDIO_BYTES, SpeechToText, STTError
+from .vision import MAX_IMAGE_BYTES, VisionError
 
 
 def create_assistant_router(provider: AstroDataProvider, assistant: Optional[AstroDocAssistant] = None,
@@ -61,6 +62,27 @@ def create_assistant_router(provider: AstroDataProvider, assistant: Optional[Ast
         resp.transcript = text
         return resp
 
+    @r.post("/chat/image", response_model=ChatResponse)
+    def chat_image(image: UploadFile = File(..., description="Photo of a device display (JPEG, PNG or WebP)"),
+                   astronaut_id: str = Form(...),
+                   message: str = Form("", description="Optional text sent with the photo"),
+                   history: str = Form("[]", description="JSON list of {role, content} turns"),
+                   offline: bool = Form(False),
+                   use_report: bool = Form(True, description="False when the chat was opened directly")):
+        """Photo message: the vision model reads the display, then the description goes through the normal
+        chat path. Readings come back in `photo.readings` and are logged only after the astronaut replies "yes".
+        Errors: 413 (over 3 MB), 415 (not an image), 502 (unreadable), 503 (vision model unavailable)."""
+        try:
+            turns = [ChatTurn(**t) for t in json.loads(history or "[]")]
+        except (ValueError, TypeError) as e:
+            raise HTTPException(status_code=422, detail=f"history must be a JSON list of turns ({e})")
+        data = image.file.read(MAX_IMAGE_BYTES + 1)
+        try:
+            return _guard(bot.chat_photo, astronaut_id, data, image.content_type, message, turns,
+                          offline=offline, use_report=use_report)
+        except VisionError as e:
+            raise HTTPException(status_code=e.status, detail=str(e))
+
     @r.post("/transcribe")
     def transcribe(audio: UploadFile = File(...)):
         """Speech -> text only (e.g. to fill the check-in form by voice)."""
@@ -92,6 +114,7 @@ def create_assistant_router(provider: AstroDataProvider, assistant: Optional[Ast
         return {"llm_available": bot.llm_available, "llm_provider": provider, "model": bot.model,
                 "fallback_models": bot.llm.fallback_models if bot.llm else [],
                 "last_llm_error": bot._last_error, "retriever": bot.kb.backend, "kb_chunks": chunks,
-                "stt_available": speech.available, "stt_model": speech.model}
+                "stt_available": speech.available, "stt_model": speech.model,
+                "vision_available": bot.vision.available, "vision_model": bot.vision.model}
 
     return r

@@ -79,6 +79,36 @@ def voice_query_flight_surgeon(
     return message
 
 
+@router.post("/image", response_model=ChatMessage)
+def image_query_flight_surgeon(
+    image: UploadFile = File(..., description="Photo of a device display (JPEG, PNG or WebP, max 3 MB)"),
+    text: str = Form("", description="Optional question sent with the photo"),
+    astronaut_id: str = Form("ASTRO-7702-HELENA"),
+    include_current_vitals: bool = Form(True),
+    db: Session = Depends(get_db),
+    current_user: Optional[UserModel] = Depends(get_optional_current_user),
+):
+    """
+    Photo question: AstroDoc's open-source vision model reads the device display, then the reading is
+    answered like a typed question. Values are logged only after the astronaut replies "yes".
+    The photo itself is not stored: only the text turns go into the chat history.
+    """
+    chat_owner = _resolve_chat_owner(current_user, astronaut_id) or astronaut_id
+    history = _recent_history(db, chat_owner)
+    try:
+        result = ai_agent_service.answer_photo(image.file.read(3 * 1024 * 1024 + 1), image.content_type,
+                                               text, chat_owner, history=history,
+                                               use_report=include_current_vitals)
+    except ai_agent_service.SpeechError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+    db.add(ChatHistoryModel(astronaut_id=chat_owner, role="user", content=f"📷 {text}".strip()))
+    db.add(ChatHistoryModel(astronaut_id=chat_owner, role="assistant", content=result["answer"],
+                            citations="; ".join(result["citations"])))
+    db.commit()
+    return ChatMessage(role="assistant", content=result["answer"], citations=result["citations"],
+                       photo_description=result["photo_description"], photo_readings=result["photo_readings"])
+
+
 def _answer_and_record(payload: ChatQuery, db: Session, current_user: Optional[UserModel]) -> ChatMessage:
     chat_owner = _resolve_chat_owner(current_user, payload.astronaut_id) or payload.astronaut_id
     telemetry_target = (

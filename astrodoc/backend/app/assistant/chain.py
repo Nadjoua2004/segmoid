@@ -35,7 +35,7 @@ import re
 import time
 from typing import Optional
 
-from .contracts import (LEVEL_RANK, ChatResponse, ChatTurn, Citation, CountermeasureCard, RedFlagInfo,
+from .contracts import (LEVEL_RANK, ChatResponse, ChatTurn, Citation, CountermeasureCard, PhotoInfo, RedFlagInfo,
                         SuggestedAction, Triage, AstronautContext)
 from .countermeasures import card_by_id, cards_for_triage, dedupe, group_cards
 from .data_provider import AstroDataProvider
@@ -50,6 +50,7 @@ from .prompts import (FINAL_CALL, GO_NO_GO_ACTIVITY, GO_NO_GO_INTENT, GO_NO_GO_P
                       greeting_reply, no_report_go_no_go_block, task_block, turn_context)
 from .redflags import detect
 from .tools import ToolSession, tool_definitions
+from .vision import READING_ORDER, READINGS_PREFIX, PhotoReader, PhotoReading
 
 log = logging.getLogger(__name__)
 
@@ -63,6 +64,7 @@ KIND_TOOLS: dict[str, Optional[set]] = {
     "information": set(),
     "symptom": {"log_measurement", "get_metric_history"},     # + trigger_crew_alert when Critical
     "log": {"log_measurement"},
+    "photo": {"get_metric_history"},                         # readings are logged only once confirmed
     "status": None,
     "go_no_go": None,
 }
@@ -74,7 +76,8 @@ CITE_RE = re.compile(r"\[(S\d+)\]")
 
 class AstroDocAssistant:
     def __init__(self, provider: AstroDataProvider, kb=None, llm: Optional[HFChatLLM] = None,
-                 offline: Optional[bool] = None, selector: Optional[HFChatLLM] = None):
+                 offline: Optional[bool] = None, selector: Optional[HFChatLLM] = None,
+                 vision: Optional[PhotoReader] = None):
         if kb is None:
             from ..knowledge.retriever import get_kb
             kb = get_kb()
@@ -91,6 +94,7 @@ class AstroDocAssistant:
         self._last_error: Optional[str] = None
         self._tools = tool_definitions([a.id for a in provider.list_crew()])
         self._tools_direct = [t for t in self._tools if t["function"]["name"] in DIRECT_TOOLS]
+        self.vision = vision or PhotoReader()      # its client is created on the first photo
 
     @staticmethod
     def _make_llm() -> Optional[HFChatLLM]:
@@ -137,16 +141,25 @@ class AstroDocAssistant:
         return resp
 
     def chat(self, astronaut_id: str, message: str, history: Optional[list[ChatTurn]] = None,
-             offline: bool = False, use_report: bool = True) -> ChatResponse:
+             offline: bool = False, use_report: bool = True,
+             photo: Optional[PhotoReading] = None) -> ChatResponse:
         """use_report=True: chat opened after the daily check-in, today's health report is used.
-        use_report=False: chat opened directly, answers come from the question and the knowledge base."""
+        use_report=False: chat opened directly, answers come from the question and the knowledge base.
+        photo: what the vision model read from a photo sent with the message (see chat_photo)."""
         history = history or []
         ctx = self.provider.get_context(astronaut_id)
         triage = self.provider.get_triage(astronaut_id)
 
+        # Red flags come from the astronaut's own words only: a photo alone never raises an alert.
         hit = detect(message)
         if hit:
             return self._red_flag(ctx, triage, message, hit)
+
+        pending = _pending_photo_readings(history) if photo is None else None
+        if pending:                             # answer to "Readings from the photo: ... Reply yes to log them"
+            answer = _confirmation(message)
+            if answer:
+                return self._confirm_photo(ctx, triage, pending, answer == "yes", use_report)
 
         if offline or not self.llm_available:
             notice = None if offline or self.force_offline else (
@@ -154,12 +167,65 @@ class AstroDocAssistant:
                 else "AI wording unavailable - offline mode.")
             return self._offline(ctx, triage, message, notice=notice, use_report=use_report)
         try:
-            return self._llm_turn(ctx, triage, message, history, use_report=use_report)
+            return self._llm_turn(ctx, triage, message, history, use_report=use_report, photo=photo)
         except Exception as e:
             self._mark_down(e)
             why = str(e) if isinstance(e, LLMError) else type(e).__name__
             return self._offline(ctx, triage, message, notice=f"AI wording unavailable ({why}) - offline mode.",
                                  use_report=use_report)
+
+    def chat_photo(self, astronaut_id: str, image: bytes, content_type: Optional[str] = None, message: str = "",
+                   history: Optional[list[ChatTurn]] = None, offline: bool = False,
+                   use_report: bool = True) -> ChatResponse:
+        """A photo, with optional text. The vision model reads it (vision.py, raises VisionError), then the
+        description goes through the normal chat path. Device readings are only logged once confirmed."""
+        photo = self.vision.read(image, content_type)
+        text = (message or "").strip()
+        ctx = self.provider.get_context(astronaut_id)
+        triage = self.provider.get_triage(astronaut_id)
+        device = photo.kind == "device" and photo.readings
+
+        if not photo.clear or not device:
+            if not photo.clear:
+                note = ("I can't read this photo clearly. Take another one close up, with the display filling the "
+                        "frame, good light and no glare.")
+            elif photo.kind == "device":
+                note = "I couldn't read any values on this display. Take another photo, or type the values."
+            else:
+                note = ("For now I can only read medical device screens (pulse oximeter, blood-pressure monitor, "
+                        "thermometer, glucose meter).")
+            if text:                            # still answer what they wrote
+                resp = self.chat(astronaut_id, text, history, offline=offline, use_report=use_report)
+                resp.reply = f"{note} I answered from your message.\n\n{resp.reply}"
+            else:
+                tail = (" If it's about a symptom, describe it in words or contact the crew medical officer."
+                        if photo.kind == "symptom" else "")
+                resp = ChatResponse(reply=note + tail, mode="template", level=triage.level)
+                resp.actions = self._actions(ctx, triage) if use_report else []
+        else:
+            resp = self.chat(astronaut_id, text or "What do these readings mean?", history, offline=offline,
+                             use_report=use_report, photo=photo)
+            if resp.mode != "redflag":
+                resp.reply = (f"{resp.reply}\n\n{photo.readings_line()} Reply \"yes\" to log them, "
+                              "or type the correct values.")
+        resp.photo = PhotoInfo(kind=photo.kind, clear=photo.clear, device=photo.device,
+                               description=photo.description, readings=photo.labels())
+        return resp
+
+    def _confirm_photo(self, ctx: AstronautContext, triage: Triage, line: str, yes: bool,
+                       use_report: bool) -> ChatResponse:
+        if not yes:
+            reply = "OK, nothing was logged. Type the correct values, for example \"SpO2 94, heart rate 80\"."
+            return ChatResponse(reply=reply, mode="template", level=triage.level)
+        aid = ctx.astronaut.id
+        values = sorted((x for x in extract_measurements(line) if x.metric != "symptom"),
+                        key=lambda x: READING_ORDER.index(x.metric) if x.metric in READING_ORDER else 99)
+        logged = [self.provider.log_measurement(aid, x.metric, x.value, x.note, source="photo") for x in values]
+        values = ", ".join(lm.label.replace("Logged: ", "") for lm in logged) or "nothing"
+        resp = ChatResponse(reply=f"Logged from the photo: {values}.", mode="template", level=triage.level,
+                            logged=logged)
+        resp.actions = self._actions(ctx, triage) if use_report else []
+        return resp
 
     def alert_crew(self, astronaut_id: str, reason: str) -> dict:
         return self.provider.trigger_crew_alert(astronaut_id, reason)
@@ -227,7 +293,8 @@ class AstroDocAssistant:
 
     # =============================================================== LLM ===
     def _llm_turn(self, ctx: AstronautContext, triage: Triage, message: str, history: list[ChatTurn],
-                  proactive: bool = False, use_report: bool = True) -> ChatResponse:
+                  proactive: bool = False, use_report: bool = True,
+                  photo: Optional[PhotoReading] = None) -> ChatResponse:
         """Two model calls at most, then quality checks in code:
           call 1  (small model) message type + only the relevant passages, cards and findings
           -       fixed replies that need no model (greeting, nothing in the knowledge base, no report ...)
@@ -244,15 +311,18 @@ class AstroDocAssistant:
         if proactive:
             sel = Selection(passages=self.kb.search(" ".join(triage.reasons), k=3), cards=all_cards,
                             findings=flagged, filtered=False, kind="status")
+        elif photo is not None:     # the filter and the search see what the photo shows, not just "what is this?"
+            sel = self._select(f"{message}\n[Photo of a {photo.device or 'device'}: {', '.join(photo.labels())}]",
+                               history, all_cards, flagged, search=f"{message} {photo.search_terms()}")
         else:
             sel = self._select(message, history, all_cards, flagged)
         go = not proactive and (_is_go_no_go(message) or sel.kind == "go_no_go")
-        kind = "go_no_go" if go else sel.kind
+        kind = "go_no_go" if go else "photo" if photo is not None else sel.kind
         if use_report:      # Critical cards always stay: the first actions are given whatever the question
             sel.cards = dedupe([*sel.cards, *(c for c in all_cards if c.level == "Critical")])
         session.cards = list(sel.cards)
 
-        if not proactive:
+        if not proactive and photo is None:     # a photo of readings always gets an answer about them
             fixed = self._fixed_reply(ctx, triage, kind, sel, session, use_report)
             if fixed:
                 log.info("message type %s: fixed reply, no answer call", kind)
@@ -273,11 +343,15 @@ class AstroDocAssistant:
         earlier = _earlier_questions(history)
         if earlier:
             parts.append(earlier)
+        if photo is not None:
+            parts.append(f"<photo>\n{photo.context()}\n</photo>")
         parts.append(f"<astronaut_message>\n{message}\n</astronaut_message>")
         messages = [{"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": "\n\n".join(parts)}]
 
         tools = self._tools_for(kind, use_report, triage)
+        if photo is not None and tools:         # photo readings are logged only after the astronaut confirms
+            tools = [t for t in tools if t["function"]["name"] != "log_measurement"] or None
         reply = None
         for _ in range(MAX_TOOL_ROUNDS):
             reply = self.llm.complete(messages, tools)
@@ -298,7 +372,10 @@ class AstroDocAssistant:
         if not text:
             raise LLMError("the model returned an empty reply")
         if not proactive:
-            text = self._quality_check(messages, text, triage, message, session, use_report, go, kind)
+            text = self._quality_check(messages, text, triage, message, session, use_report, go, kind,
+                                       photo_metrics={r.metric for r in photo.readings} if photo else set())
+            if photo is not None:               # AstroDoc adds the confirm line itself: no second request
+                text = drop_sentences(text, lambda s: bool(_ASKS_TO_CONFIRM.search(s))) or text
         return self._finish_llm(ctx, triage, message, text, session, use_report=use_report)
 
     def _fixed_reply(self, ctx: AstronautContext, triage: Triage, kind: str, sel: Selection,
@@ -335,12 +412,12 @@ class AstroDocAssistant:
         return tools or None
 
     def _select(self, message: str, history: list[ChatTurn], cards: list[CountermeasureCard],
-                findings: list) -> Selection:
+                findings: list, search: Optional[str] = None) -> Selection:
         """Call 1: retrieve candidates for the message, then the small model gives the message type and keeps
         only what helps answer it (grounding.py). If no passage is relevant to a symptom or information
         question, one more search with the filter's own query. If the filter cannot run, the top passages are
         used unchecked rather than failing the turn."""
-        candidates = self.kb.search(message, k=CANDIDATE_PASSAGES)
+        candidates = self.kb.search(search or message, k=CANDIDATE_PASSAGES)
         unchecked = Selection(passages=candidates[:3], cards=cards, findings=findings, filtered=False)
         if self.selector is None:
             return unchecked
@@ -363,7 +440,7 @@ class AstroDocAssistant:
             return unchecked
 
     def _quality_check(self, messages: list[dict], text: str, triage: Triage, message: str, session: ToolSession,
-                       use_report: bool, go: bool, kind: str = "") -> str:
+                       use_report: bool, go: bool, kind: str = "", photo_metrics: Optional[set] = None) -> str:
         """Checks in code on the model's answer (grounding.py), no extra model call. Removes sentences that:
         claim a finding that does not exist, use a number found in no source, give uncited advice made of words
         found in no source, or give a duty verdict nobody asked for."""
@@ -372,6 +449,7 @@ class AstroDocAssistant:
         allowed = {allowed_key(m.metric) for m in triage.metric_levels if m.level != "Nominal"} if use_report else set()
         allowed |= {allowed_key(lm.metric) for lm in session.logged}     # values the astronaut just gave
         allowed |= mentioned_metrics(message)                            # "is my CO2 too high?"
+        allowed |= {allowed_key(m) for m in (photo_metrics or ())}       # values read from their photo
         checks = {
             "invented finding": {s for s, _ in unsupported_claims(text, allowed)},
             "number not in sources": set(unsupported_numbers(text, sources)),
@@ -537,6 +615,9 @@ def _clean_reply(text: str) -> str:
     text = re.sub(r"<think>.*?</think>", "", text or "", flags=re.S)
     # gpt-oss writes citations in its own style: 【S2】, 【S2†L3-L5】 -> [S2]
     text = re.sub(r"【\s*(S\d+)[^】]*】", r"[\1]", text)
+    # pseudo-citations of prompt blocks ("[photo]", "[turn_context]") are not sources
+    text = re.sub(r"\s*\[(?:photo|image|turn_context|facts|knowledge|task|go_no_go|health report)\]", "", text,
+                  flags=re.I)
     # tool calls an open model wrote as text instead of calling the tool: <trigger_crew_alert .../>,
     # <tool_call>...</tool_call>, "(triggering crew alert ...)" - the astronaut must never see these
     text = re.sub(r"<(tool_call|function_call|function)[^>]*>.*?</\1>", "", text, flags=re.S | re.I)
@@ -565,6 +646,35 @@ def _is_go_no_go(message: str) -> bool:
 
 
 EARLIER_QUESTIONS = 3
+
+
+_YES = re.compile(r"^\W*(yes|yeah|yep|yup|ya|correct|right|that'?s right|exactly|ok|okay|sure|confirm(ed)?|"
+                  r"log (them|it|that)|please log( them| it)?|go ahead)\b[\s\w,.!']*$", re.I)
+_NO = re.compile(r"^\W*(no|nope|wrong|incorrect|not right|that'?s wrong|don'?t log( (them|it))?)\b[\s\w,.!']*$", re.I)
+
+
+_ASKS_TO_CONFIRM = re.compile(r"\b(?:confirm|verify|double-check|check)\b[^.!?\n]{0,40}\b(?:values?|readings?|numbers?)"
+                              r"\b[^.!?\n]{0,40}\b(?:log|record|save)|\b(?:so (?:we|i) can|to) (?:log|record) (?:them|"
+                              r"these|the (?:values|readings))", re.I)
+
+
+def _pending_photo_readings(history: list[ChatTurn]) -> Optional[str]:
+    """The "Readings from the photo: ..." line of AstroDoc's last answer, if it is waiting for confirmation."""
+    last = next((t for t in reversed(history) if t.role == "assistant"), None)
+    if last is None:
+        return None
+    line = next((ln for ln in last.content.splitlines() if ln.strip().startswith(READINGS_PREFIX)), None)
+    return line.split("Reply", 1)[0].strip() if line else None
+
+
+def _confirmation(message: str) -> Optional[str]:
+    """'yes' / 'no' for a short confirmation; None for anything else (corrected values, a new question)."""
+    m = (message or "").strip().lower().replace("’", "'")
+    if not m or len(m.split()) > 6 or re.search(r"\d", m):
+        return None
+    if _NO.match(m):
+        return "no"
+    return "yes" if _YES.match(m) else None
 
 
 def _earlier_list(history: list[ChatTurn]) -> list[str]:

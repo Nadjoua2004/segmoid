@@ -87,6 +87,8 @@ export interface ChatHistoryItem {
   content: string;
   citations: string[];
   timestamp: string;
+  image_url?: string; // photo sent in this session (local preview only, never stored)
+  photo_note?: string; // what AstroDoc read from that photo
 }
 
 export const api = {
@@ -276,6 +278,33 @@ export const api = {
   },
 
   // Voice question: recorded audio -> Whisper speech-to-text -> same answer path as a typed question
+  // Photo of a device display (pulse oximeter, BP monitor, thermometer, glucose meter): AstroDoc reads it with
+  // an open-source vision model and answers. Readings are logged only after the astronaut replies "yes".
+  async photoQueryFlightSurgeon(image: Blob, text: string, astronautId: string,
+                                useReport: boolean = false): Promise<ChatMessage> {
+    const form = new FormData();
+    form.append("image", image, "photo.jpg");
+    form.append("text", text);
+    form.append("astronaut_id", astronautId);
+    form.append("include_current_vitals", String(useReport));
+    const response = await fetch(`${API_BASE}/api/chat/image`, {
+      method: "POST",
+      headers: { ...getStoredAuthHeaders() }, // the browser sets the multipart boundary
+      body: form,
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      let detail = body;
+      try {
+        detail = JSON.parse(body).detail || body;
+      } catch {
+        /* plain-text error */
+      }
+      throw new Error(detail || `Photo upload failed (${response.status})`);
+    }
+    return response.json();
+  },
+
   async voiceQueryFlightSurgeon(audio: Blob, filename: string, astronautId: string,
                                 useReport: boolean = false): Promise<ChatMessage> {
     const form = new FormData();

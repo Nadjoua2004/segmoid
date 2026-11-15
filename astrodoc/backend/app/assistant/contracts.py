@@ -170,6 +170,14 @@ class AlertCrewRequest(BaseModel):
     reason: str = "Astronaut pressed 'Alert crew now' in AstroDoc AI"
 
 
+class PhotoInfo(BaseModel):
+    kind: str                       # device | symptom | food | document | other
+    clear: bool = True
+    device: str = ""
+    description: str = ""           # what the vision model saw (show it under the photo)
+    readings: list[str] = Field(default_factory=list)   # "SpO2 91 %": read, not logged until confirmed
+
+
 class ChatResponse(BaseModel):
     reply: str
     mode: Literal["llm", "offline", "redflag", "template"]
@@ -183,3 +191,4 @@ class ChatResponse(BaseModel):
     crew_alert_triggered: bool = False
     notice: Optional[str] = None    # e.g. "AI wording unavailable - offline mode"
     transcript: Optional[str] = None  # voice messages: what Whisper heard (show it as the user's bubble)
+    photo: Optional[PhotoInfo] = None  # photo messages: what was read from it

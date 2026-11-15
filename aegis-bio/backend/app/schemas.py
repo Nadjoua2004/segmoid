@@ -253,6 +253,8 @@ class ChatMessage(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     citations: Optional[List[str]] = None
     transcript: Optional[str] = None  # voice questions: what the speech-to-text heard
+    photo_description: Optional[str] = None  # photo questions: what the vision model saw
+    photo_readings: Optional[List[str]] = None  # values read from the photo, logged only after "yes"
 
 
 # =========================================================

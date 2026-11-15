@@ -136,6 +136,36 @@ class AIAgentService:
         except STTError as e:
             raise self.SpeechError(str(e), e.status)
 
+    def answer_photo(
+        self,
+        image: bytes,
+        content_type: Optional[str],
+        text: str,
+        astronaut_id: str,
+        history: Optional[List[Dict[str, str]]] = None,
+        use_report: bool = True,
+    ) -> Dict[str, Any]:
+        """Photo of a device display (pulse oximeter, BP monitor, thermometer, glucose meter): AstroDoc's
+        open-source vision model reads it, then the reading is answered like a typed question. The reply ends
+        with "Readings from the photo: ..."; they are logged only when the astronaut answers "yes"."""
+        if not self.astrodoc_bot:
+            raise self.SpeechError("Photo reading unavailable: AstroDoc not loaded", 503)
+        from astrodoc_app.assistant.contracts import ChatTurn
+        from astrodoc_app.assistant.vision import VisionError
+        turns = [ChatTurn(role=h["role"], content=h["content"]) for h in (history or [])
+                 if h.get("role") in ("user", "assistant") and h.get("content")]
+        try:
+            res = self.astrodoc_bot.chat_photo(astronaut_id, image, content_type, text, turns, use_report=use_report)
+        except VisionError as e:
+            raise self.SpeechError(str(e), e.status)
+        photo = getattr(res, "photo", None)
+        return {
+            "answer": res.reply,
+            "citations": list(dict.fromkeys(c.title for c in (res.citations or []))),
+            "photo_description": photo.description if photo else None,
+            "photo_readings": photo.readings if photo else [],
+        }
+
     def _initialize_vector_db(self):
         """Initializes ChromaDB vector collection with NASA HRP medical knowledge."""
         try:

@@ -173,21 +173,24 @@ def _numbers_with_units(text: str) -> set[str]:
     return out
 
 
+# "6.5-9.0 hours" and "148/95 mmHg": every number of a range or pair carries the unit
+_PAIR = re.compile(r"(\d+(?:\.\d+)?)\s*([-–/])\s*(\d+(?:\.\d+)?)\s*([a-z%°]+)", re.I)
+
+
+def _spread_units(text: str) -> str:
+    return _PAIR.sub(r"\1 \4 \2 \3 \4", text or "")
+
+
 def unsupported_numbers(text: str, sources: str) -> list[str]:
     """Sentences with a number that is in no source or the message: a number with a unit must appear with the
     same unit ("drink 2 L" needs "2 L" somewhere, not just any 2), a bare number must appear at all ("CO2 28"
     when 26 was given). Citation markers and list numbers are ignored."""
-    known, known_units = _numbers(sources), _numbers_with_units(sources)
-    # "6.5-9.0 hours" in a source: every number of a range carries its unit
-    for lo, hi, unit in re.findall(r"(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*([a-z%°]+)", sources or "", re.I):
-        known_units |= _numbers_with_units(f"{lo} {unit} {hi} {unit}")
+    known, known_units = _numbers(sources), _numbers_with_units(_spread_units(sources))
     out = []
     for line in (text or "").splitlines():
         for sent in split_sentences(line):
             body = _CITE.sub("", re.sub(r"^\s*\d+[.)]\s+", "", sent))
-            body_ranges = re.sub(r"(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*([a-z%°]+)", r"\1 \3 \2 \3", body,
-                                 flags=re.I)
-            if _numbers(body) - known or _numbers_with_units(body_ranges) - known_units:
+            if _numbers(body) - known or _numbers_with_units(_spread_units(body)) - known_units:
                 out.append(sent)
     return out
 
@@ -280,8 +283,17 @@ def allowed_key(metric: str) -> str:
     return SAME_METRIC.get(metric, metric)
 
 
+_LIST_MARKER = re.compile(r"^(\s*(?:\d+[.)]|[-*•])\s+)")
+
+
 def split_sentences(line: str) -> list[str]:
-    return [s for s in re.split(r"(?<=[.!?])\s+(?=[\"'(\[]?[A-Z0-9])", line) if s.strip()]
+    """Sentences of one line. A leading list marker ("1. ", "- ") stays with the first sentence."""
+    m = _LIST_MARKER.match(line or "")
+    marker, body = (m.group(1), line[m.end():]) if m else ("", line or "")
+    sents = [s for s in re.split(r"(?<=[.!?])\s+(?=[\"'(\[]?[A-Z0-9])", body) if s.strip()]
+    if sents and marker:
+        sents[0] = marker + sents[0]
+    return sents
 
 
 def unsupported_claims(text: str, allowed: set[str]) -> list[tuple[str, str]]:
@@ -333,5 +345,14 @@ def drop_sentences(text: str, drop) -> str:
         if sents and not kept:
             continue
         lines.append(" ".join(kept) if sents else line)
-    out = "\n".join(lines)
+    # a heading such as "For a SpO2 warning you should:" whose list items were all removed
+    is_item = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+")
+    cleaned = []
+    for i, line in enumerate(lines):
+        if line.rstrip().endswith(":"):
+            nxt = next((ln for ln in lines[i + 1:] if ln.strip()), None)
+            if nxt is None or not is_item.match(nxt):
+                continue
+        cleaned.append(line)
+    out = "\n".join(cleaned)
     return re.sub(r"\n{3,}", "\n\n", out).strip()
