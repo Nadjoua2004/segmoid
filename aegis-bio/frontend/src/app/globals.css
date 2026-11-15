@@ -146,3 +146,21 @@ input, select, textarea, button {
   0%, 100% { opacity: 0.72; filter: drop-shadow(0 0 8px rgba(45, 212, 191, 0.45)); }
   50% { opacity: 1; filter: drop-shadow(0 0 18px rgba(45, 212, 191, 0.85)); }
 }
+
+@keyframes astroFloat {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-7px); }
+}
+
+@keyframes astroEyesLook {
+  0%, 18% { transform: translateX(0px); }
+  24%, 40% { transform: translateX(-6px); }
+  46%, 60% { transform: translateX(0px); }
+  66%, 82% { transform: translateX(6px); }
+  88%, 100% { transform: translateX(0px); }
+}
+
+@keyframes astroEyeBlink {
+  0%, 44%, 48%, 92%, 96%, 100% { transform: scaleY(1); }
+  46%, 94% { transform: scaleY(0.12); }
+}

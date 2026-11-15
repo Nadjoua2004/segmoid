@@ -256,13 +256,55 @@ export function StationLoginPage({ onLoginSuccess }: StationLoginPageProps) {
               <path d="M7 12.5 H9.5 L11 9 L13 16 L14.5 12.5 H17" stroke="#2DD4BF" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
             </svg>
           </div>
-          <h1 style={{ margin: "6px 0 0", fontSize: "21px", fontWeight: 700, letterSpacing: "-0.02em", color: "#F1F5F9" }}>
-            Aegis-Bio Station Portal
+          <h1 style={{ margin: "6px 0 0", fontSize: "24px", fontWeight: 700, letterSpacing: "0.08em", color: "#F1F5F9" }}>
+            APEX
           </h1>
-          <p style={{ margin: 0, fontSize: "12.5px", color: "#94A3B8" }}>
-            Deep-Space Offline-First Station Access
+          <p style={{ margin: 0, fontSize: "12px", lineHeight: "17px", color: "#94A3B8", maxWidth: "330px" }}>
+            Autonomous Psychophysiological Evaluation for eXploration
           </p>
         </div>
+
+        {/* Crew Leader Credentials Quick-Fill */}
+        <button
+          type="button"
+          onClick={() => {
+            setUsername("lead");
+            setKey("Key1234!");
+            setErrorMsg("");
+          }}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "12px",
+            padding: "10px 14px",
+            borderRadius: "10px",
+            border: "1px solid rgba(45, 212, 191, 0.28)",
+            background: "rgba(45, 212, 191, 0.08)",
+            color: "#E2E8F0",
+            fontSize: "12px",
+            cursor: "pointer",
+            textAlign: "left",
+          }}
+        >
+          <span style={{ display: "flex", alignItems: "center", gap: "8px", fontFamily: "monospace" }}>
+            <span style={{ color: "#5EEAD4", fontWeight: 600 }}>lead</span>
+            <span style={{ color: "#64748B" }}>/</span>
+            <span style={{ color: "#CBD5E1" }}>Key1234!</span>
+          </span>
+          <span
+            style={{
+              fontSize: "11px",
+              fontWeight: 600,
+              color: "#5EEAD4",
+              background: "rgba(45, 212, 191, 0.14)",
+              padding: "2px 8px",
+              borderRadius: "999px",
+            }}
+          >
+            Crew Leader
+          </span>
+        </button>
 
         {errorMsg && (
           <div

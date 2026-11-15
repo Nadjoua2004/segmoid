@@ -13,15 +13,57 @@ interface HologramModel3DProps {
   spo2?: number | null;
   sleepHours?: number | null;
   radiationMsv?: number | null;
+  bpSys?: number | null;
+  bpDia?: number | null;
+  coreTempC?: number | null;
+  bloodGlucose?: number | null;
+  hrvRmssd?: number | null;
+  moodScore?: number | null;
 }
 
+type BodyHotspotId = "brain" | "heart" | "lungs" | "metabolic";
+
+interface BodyHotspotDef {
+  id: BodyHotspotId;
+  title: string;
+  localPos: [number, number, number];
+  side: "left" | "right";
+  cardTopPct: number;
+}
+
+const BODY_HOTSPOTS: BodyHotspotDef[] = [
+  { id: "brain", title: "NEURO / SLEEP", localPos: [0, 1.32, 0.08], side: "left", cardTopPct: 10 },
+  { id: "heart", title: "HEART / CARDIO", localPos: [0.06, 0.52, 0.14], side: "right", cardTopPct: 26 },
+  { id: "lungs", title: "LUNGS / O₂", localPos: [-0.11, 0.56, 0.12], side: "left", cardTopPct: 44 },
+  { id: "metabolic", title: "RADIATION / METABOLIC", localPos: [0, -0.05, 0.13], side: "right", cardTopPct: 62 },
+];
+
 const STATUS_HEX: Record<StatusKey, number> = {
-  NORMAL: 0x2dd4bf,
+  NORMAL: 0x10e89a,
   MEDIUM: 0xfbbf24,
   CRITICAL: 0xfb7185,
   UNCLASSIFIED: 0x60a5fa,
-  NODATA: 0x2dd4bf,
+  NODATA: 0x10e89a,
 };
+
+function createGlowTexture(): THREE.CanvasTexture | null {
+  if (typeof document === "undefined") return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = 64;
+  canvas.height = 64;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  const grad = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grad.addColorStop(0, "rgba(255,255,255,1)");
+  grad.addColorStop(0.25, "rgba(210,255,235,0.85)");
+  grad.addColorStop(0.55, "rgba(16,232,154,0.28)");
+  grad.addColorStop(1, "rgba(16,232,154,0)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 64, 64);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.needsUpdate = true;
+  return tex;
+}
 
 function smoothBell(value: number, min: number, peak: number, max: number): number {
   if (value <= min || value >= max) return 0;
@@ -113,6 +155,12 @@ export function HologramModel3D({
   spo2,
   sleepHours,
   radiationMsv,
+  bpSys,
+  bpDia,
+  coreTempC,
+  bloodGlucose,
+  hrvRmssd,
+  moodScore,
 }: HologramModel3DProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const angleRef = useRef<number>(0);
@@ -124,15 +172,22 @@ export function HologramModel3D({
     startAngle: 0,
   });
   const materialRef = useRef<THREE.ShaderMaterial | null>(null);
+  const wireMatRef = useRef<THREE.LineBasicMaterial | null>(null);
+  const nodeMatRef = useRef<THREE.PointsMaterial | null>(null);
   const ringMatRef = useRef<THREE.MeshBasicMaterial | null>(null);
   const particleMatRef = useRef<THREE.PointsMaterial | null>(null);
+  const hotspotRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const svgLineRef = useRef<SVGLineElement | null>(null);
+  const activePinRef = useRef<BodyHotspotId | null>(null);
 
   const [yawDeg, setYawDeg] = useState<number>(0);
   const [isAutoRotating, setIsAutoRotating] = useState<boolean>(true);
   const [isModelLoaded, setIsModelLoaded] = useState<boolean>(false);
+  const [activePinId, setActivePinId] = useState<BodyHotspotId | null>(null);
 
   statusRef.current = status;
   autoRotateRef.current = isAutoRotating;
+  activePinRef.current = activePinId;
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -147,6 +202,12 @@ export function HologramModel3D({
     const hex = STATUS_HEX[status];
     if (materialRef.current) {
       materialRef.current.uniforms.uColor.value.setHex(hex);
+    }
+    if (wireMatRef.current) {
+      wireMatRef.current.color.setHex(hex);
+    }
+    if (nodeMatRef.current) {
+      nodeMatRef.current.color.setHex(hex);
     }
     if (ringMatRef.current) {
       ringMatRef.current.color.setHex(hex);
@@ -176,7 +237,10 @@ export function HologramModel3D({
 
     const disposables: { dispose: () => void }[] = [];
 
-    // Custom Holographic Dotted-Lattice + Fresnel Rim Shader (outer skin only, no bones)
+    const glowTex = createGlowTexture();
+    if (glowTex) disposables.push(glowTex);
+
+    // Custom Holographic Fresnel Rim + Subtle Translucent Core Shader
     const holoMat = new THREE.ShaderMaterial({
       transparent: true,
       depthWrite: false,
@@ -190,13 +254,11 @@ export function HologramModel3D({
         varying vec3 vNormalView;
         varying vec3 vViewDir;
         varying vec3 vWorldPos;
-        varying vec3 vLocalPos;
         void main() {
           vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
           vNormalView = normalize(normalMatrix * normal);
           vViewDir = normalize(-mvPosition.xyz);
           vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
-          vLocalPos = position;
           gl_Position = projectionMatrix * mvPosition;
         }
       `,
@@ -206,22 +268,41 @@ export function HologramModel3D({
         varying vec3 vNormalView;
         varying vec3 vViewDir;
         varying vec3 vWorldPos;
-        varying vec3 vLocalPos;
         void main() {
           float ndotv = abs(dot(normalize(vNormalView), normalize(vViewDir)));
-          float fresnel = pow(1.0 - ndotv, 2.0);
-          vec3 cell = fract(vLocalPos * 3.6) - 0.5;
-          float dots = smoothstep(0.28, 0.11, length(cell));
-          float scan = 0.88 + 0.12 * sin(vWorldPos.y * 38.0 - uTime * 3.2);
-          float sweep = smoothstep(0.16, 0.0, abs(fract(vWorldPos.y * 0.24 - uTime * 0.18) - 0.5));
-          float alpha = clamp((0.06 + dots * 0.36 + fresnel * 0.82 + sweep * 0.16) * scan, 0.04, 0.94);
-          vec3 col = mix(uColor, vec3(0.86, 0.99, 1.0), fresnel * 0.56 + dots * 0.22 + sweep * 0.26);
+          float fresnel = pow(1.0 - ndotv, 2.1);
+          float sweep = smoothstep(0.18, 0.0, abs(fract(vWorldPos.y * 0.24 - uTime * 0.18) - 0.5));
+          float alpha = clamp(0.035 + fresnel * 0.68 + sweep * 0.12, 0.02, 0.86);
+          vec3 col = mix(uColor, vec3(0.84, 1.0, 0.94), fresnel * 0.48 + sweep * 0.24);
           gl_FragColor = vec4(col, alpha);
         }
       `,
     });
     materialRef.current = holoMat;
     disposables.push(holoMat);
+
+    // Glowing neural-wireframe network & luminous surface nodes
+    const wireMat = new THREE.LineBasicMaterial({
+      color: STATUS_HEX[statusRef.current],
+      transparent: true,
+      opacity: 0.24,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    wireMatRef.current = wireMat;
+    disposables.push(wireMat);
+
+    const nodeMat = new THREE.PointsMaterial({
+      color: STATUS_HEX[statusRef.current],
+      map: glowTex ?? undefined,
+      size: 0.085,
+      transparent: true,
+      opacity: 0.88,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    nodeMatRef.current = nodeMat;
+    disposables.push(nodeMat);
 
     // Floating human pivot
     const humanPivot = new THREE.Group();
@@ -237,9 +318,32 @@ export function HologramModel3D({
         root.traverse((obj) => {
           if ((obj as THREE.Mesh).isMesh) {
             const mesh = obj as THREE.Mesh;
+            // Hide MakeHuman rigging helper/joint cages so only the clean human shape renders
+            if (mesh.name && mesh.name !== "body") {
+              mesh.visible = false;
+              return;
+            }
             if (mesh.geometry) {
               mesh.geometry.computeVertexNormals();
               disposables.push(mesh.geometry);
+
+              const wireGeo = new THREE.WireframeGeometry(mesh.geometry);
+              disposables.push(wireGeo);
+              const wireMesh = new THREE.LineSegments(wireGeo, wireMat);
+              mesh.add(wireMesh);
+
+              const posAttr = mesh.geometry.getAttribute("position");
+              if (posAttr) {
+                const nodeCoords: number[] = [];
+                for (let i = 0; i < posAttr.count; i += 24) {
+                  nodeCoords.push(posAttr.getX(i), posAttr.getY(i), posAttr.getZ(i));
+                }
+                const nodeGeo = new THREE.BufferGeometry();
+                nodeGeo.setAttribute("position", new THREE.Float32BufferAttribute(nodeCoords, 3));
+                disposables.push(nodeGeo);
+                const nodePoints = new THREE.Points(nodeGeo, nodeMat);
+                mesh.add(nodePoints);
+              }
             }
             mesh.material = holoMat;
           }
@@ -259,7 +363,6 @@ export function HologramModel3D({
         root.scale.set(scaleXZ, scaleY, scaleXZ);
         root.position.set(-center.x * scaleXZ, -center.y * scaleY, -center.z * scaleXZ);
 
-        sculptLegMuscles(root);
         humanPivot.add(root);
         setIsModelLoaded(true);
       },
@@ -343,9 +446,10 @@ export function HologramModel3D({
     pGeo.setAttribute("position", new THREE.BufferAttribute(pPositions, 3));
     const pMat = new THREE.PointsMaterial({
       color: STATUS_HEX[statusRef.current],
-      size: 0.03,
+      map: glowTex ?? undefined,
+      size: 0.09,
       transparent: true,
-      opacity: 0.55,
+      opacity: 0.72,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
@@ -383,6 +487,30 @@ export function HologramModel3D({
       // Floating levitation + smooth 360 rotation
       humanPivot.rotation.y = angleRef.current;
       humanPivot.position.y = Math.sin(t * 1.5) * 0.065 + 0.04;
+      humanPivot.updateMatrixWorld();
+
+      // Project 3D anatomical hotspots onto 2D stage coordinates
+      const cw = container.clientWidth;
+      const ch = container.clientHeight;
+      const proj = new THREE.Vector3();
+      for (const h of BODY_HOTSPOTS) {
+        proj.set(h.localPos[0], h.localPos[1], h.localPos[2]);
+        proj.applyMatrix4(humanPivot.matrixWorld).project(camera);
+        const px = (proj.x * 0.5 + 0.5) * cw;
+        const py = (-proj.y * 0.5 + 0.5) * ch;
+        const btn = hotspotRefs.current[h.id];
+        if (btn) {
+          btn.style.transform = `translate3d(${px}px, ${py}px, 0) translate(-50%, -50%)`;
+        }
+        if (activePinRef.current === h.id && svgLineRef.current) {
+          const cardAnchorX = h.side === "left" ? Math.min(156, cw * 0.34) : Math.max(cw - 156, cw * 0.66);
+          const cardAnchorY = (h.cardTopPct / 100) * ch + 26;
+          svgLineRef.current.setAttribute("x1", px.toFixed(1));
+          svgLineRef.current.setAttribute("y1", py.toFixed(1));
+          svgLineRef.current.setAttribute("x2", cardAnchorX.toFixed(1));
+          svgLineRef.current.setAttribute("y2", cardAnchorY.toFixed(1));
+        }
+      }
 
       // Gentle drift on particles
       particles.rotation.y = -t * 0.14;
@@ -486,37 +614,108 @@ export function HologramModel3D({
           </span>
         )}
 
-        {/* Anatomical HUD Callout Pins */}
-        <div className="pointer-events-none absolute left-1 top-[12%] z-10 hidden items-center gap-bio-1 sm:flex">
-          <div className="rounded-bio-sm border border-bio-primary/35 bg-bio-canvas/70 px-bio-2 py-bio-1 backdrop-blur-sm">
-            <div className="font-mono text-[10px] text-bio-text-muted">NEURO / SLEEP</div>
-            <div className="font-mono text-bio-xs font-semibold text-bio-primary">
-              {sleepHours != null ? `${Number(sleepHours).toFixed(1)} h` : "—"}
-            </div>
-          </div>
-          <span className="h-px w-5 bg-bio-primary/50" />
-        </div>
+        {/* Interactive 3D Anatomical Hotspots + Leader Line + Rounded Callout Card */}
+        {isModelLoaded && (
+          <>
+            {activePinId && (
+              <svg
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 z-10 h-full w-full"
+              >
+                <line
+                  ref={svgLineRef}
+                  x1="0"
+                  y1="0"
+                  x2="0"
+                  y2="0"
+                  stroke="#2DD4BF"
+                  strokeWidth="1.5"
+                  strokeDasharray="4 3"
+                  strokeOpacity="0.85"
+                />
+              </svg>
+            )}
 
-        <div className="pointer-events-none absolute right-1 top-[28%] z-10 hidden items-center gap-bio-1 sm:flex">
-          <span className="h-px w-5 bg-bio-primary/50" />
-          <div className="rounded-bio-sm border border-bio-primary/35 bg-bio-canvas/70 px-bio-2 py-bio-1 text-right backdrop-blur-sm">
-            <div className="font-mono text-[10px] text-bio-text-muted">CARDIO / O₂</div>
-            <div className="font-mono text-bio-xs font-semibold text-bio-primary">
-              {heartRate != null ? `${Math.round(heartRate)} bpm` : "—"} ·{" "}
-              {spo2 != null ? `${Number(spo2).toFixed(1)}%` : "—"}
-            </div>
-          </div>
-        </div>
+            {BODY_HOTSPOTS.map((h) => {
+              const isSelected = activePinId === h.id;
+              return (
+                <button
+                  key={h.id}
+                  ref={(el) => {
+                    hotspotRefs.current[h.id] = el;
+                  }}
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => setActivePinId((prev) => (prev === h.id ? null : h.id))}
+                  aria-label={`Inspect ${h.title}`}
+                  aria-expanded={isSelected}
+                  title={`Click to ${isSelected ? "hide" : "inspect"} ${h.title}`}
+                  style={{ left: 0, top: 0 }}
+                  className="bio-focus absolute z-20 flex h-6 w-6 items-center justify-center rounded-full"
+                >
+                  <span
+                    className={`absolute h-5 w-5 rounded-full transition-transform duration-200 ${
+                      isSelected
+                        ? "scale-125 bg-bio-primary/35 ring-2 ring-bio-primary"
+                        : "animate-ping bg-bio-primary/30"
+                    }`}
+                  />
+                  <span
+                    className={`relative h-2.5 w-2.5 rounded-full border border-white/80 transition-colors ${
+                      isSelected ? "bg-white shadow-[0_0_10px_#2DD4BF]" : "bg-bio-primary shadow-[0_0_8px_#10E89A]"
+                    }`}
+                  />
+                </button>
+              );
+            })}
 
-        <div className="pointer-events-none absolute bottom-[16%] left-1 z-10 hidden items-center gap-bio-1 sm:flex">
-          <div className="rounded-bio-sm border border-bio-accent/35 bg-bio-canvas/70 px-bio-2 py-bio-1 backdrop-blur-sm">
-            <div className="font-mono text-[10px] text-bio-text-muted">RADIATION</div>
-            <div className="font-mono text-bio-xs font-semibold text-bio-accent">
-              {radiationMsv != null ? `${Number(radiationMsv).toFixed(2)} mSv` : "—"}
-            </div>
-          </div>
-          <span className="h-px w-5 bg-bio-accent/50" />
-        </div>
+            {BODY_HOTSPOTS.map((h) => {
+              if (activePinId !== h.id) return null;
+              let primaryLine = "—";
+              let secondaryLine = "";
+              if (h.id === "brain") {
+                primaryLine = sleepHours != null ? `${Number(sleepHours).toFixed(1)} h sleep` : "No sleep data";
+                secondaryLine = moodScore != null ? `Mood ${moodScore}/5` : "Cognitive & rest";
+              } else if (h.id === "heart") {
+                primaryLine = heartRate != null ? `${Math.round(heartRate)} bpm` : "No HR data";
+                secondaryLine =
+                  bpSys != null && bpDia != null
+                    ? `BP ${Math.round(bpSys)}/${Math.round(bpDia)}${hrvRmssd != null ? ` · HRV ${Math.round(hrvRmssd)} ms` : ""}`
+                    : "Cardiovascular load";
+              } else if (h.id === "lungs") {
+                primaryLine = spo2 != null ? `SpO₂ ${Number(spo2).toFixed(1)}%` : "No SpO₂ data";
+                secondaryLine = coreTempC != null ? `Core ${Number(coreTempC).toFixed(1)} °C` : "Oxygenation";
+              } else {
+                primaryLine = radiationMsv != null ? `${Number(radiationMsv).toFixed(2)} mSv` : "No dose data";
+                secondaryLine = bloodGlucose != null ? `Glucose ${Math.round(bloodGlucose)} mg/dL` : "Exposure & metabolic";
+              }
+
+              return (
+                <button
+                  key={`card-${h.id}`}
+                  type="button"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => setActivePinId(null)}
+                  title="Click to collapse"
+                  style={{ top: `${h.cardTopPct}%` }}
+                  className={`bio-focus absolute z-20 max-w-[168px] rounded-xl border border-bio-primary/50 bg-bio-canvas/90 px-3 py-2 text-left shadow-[0_8px_24px_rgba(0,0,0,0.55)] backdrop-blur-md transition-all duration-200 hover:border-bio-primary ${
+                    h.side === "left" ? "left-2" : "right-2 text-right"
+                  }`}
+                >
+                  <div className="font-mono text-[10px] font-semibold tracking-wider text-bio-primary">
+                    {h.title}
+                  </div>
+                  <div className="mt-0.5 font-mono text-bio-sm font-semibold text-bio-text">
+                    {primaryLine}
+                  </div>
+                  <div className="mt-0.5 text-[11px] text-bio-text-secondary">
+                    {secondaryLine}
+                  </div>
+                </button>
+              );
+            })}
+          </>
+        )}
       </div>
 
       {/* Bottom Interactive Hint */}

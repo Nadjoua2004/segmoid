@@ -75,8 +75,8 @@ Notes:
 | Call | When |
 |---|---|
 | `POST /api/chat/greet` `{astronaut_id, use_llm?: false, offline?}` | When a triage comes back Warning/Critical: open the panel and play the sound. It returns instantly; it doesn't call the LLM unless `use_llm` is set. |
-| `POST /api/chat` `{astronaut_id, message, history: [{role, content}], offline?}` | Each message. Send the earlier turns of the panel as `history`. |
-| `POST /api/chat/voice` (multipart: `audio` file, `astronaut_id`, `history` as JSON string, `offline`) | Voice message. Whisper (open-source, on Groq) transcribes it, then it goes through the same path as `/api/chat`: red flags, knowledge base, logging. The response is a `ChatResponse` with `transcript` set; show it as the user's bubble. Errors: 422 (no speech detected), 413 (over 10 MB), 503 (speech service unavailable, so offer typing). |
+| `POST /api/chat` `{astronaut_id, message, history: [{role, content}], offline?, use_report?}` | Each message. Send the earlier turns of the panel as `history`. `use_report: true` (the default) when the chat was opened automatically after the daily check-in, so today's health report is used; `false` when the astronaut opened it directly. |
+| `POST /api/chat/voice` (multipart: `audio` file, `astronaut_id`, `history` as JSON string, `offline`, `use_report`) | Voice message. Whisper (open-source, on Groq) transcribes it, then it goes through the same path as `/api/chat`: red flags, knowledge base, logging. The response is a `ChatResponse` with `transcript` set; show it as the user's bubble. Errors: 422 (no speech detected), 413 (over 10 MB), 503 (speech service unavailable, so offer typing). |
 | `POST /api/transcribe` (multipart `audio`) | Speech to text only, e.g. to fill the daily check-in form by voice. Returns `{text}`. |
 | `POST /api/chat/alert-crew` `{astronaut_id, reason?}` | "Alert crew now" button |
 | `GET /api/countermeasures?hazard=&topic=&level=` | Countermeasure cards for the dashboard |
@@ -115,7 +115,25 @@ How to render it:
 
 1. **Red-flag fast path**: chest pain, can't breathe, passed out, can't see, severe headache or confusion triggers an instant Critical reply with no LLM call. It logs the symptom, calls `raise_alert(..., "Critical")` to start the escalation timer, and offers "Alert crew now".
 2. **LLM**: an open-source model through the Hugging Face Inference API (`app/assistant/llm.py`). The default is `openai/gpt-oss-120b` (Apache-2.0), with `Qwen/Qwen3.8-27B` as fallback; change them with `LLM_MODEL` and `LLM_FALLBACK_MODELS`. Before each call the bot pre-loads the countermeasure cards, the matching knowledge-base passages and any values typed in the message, so citations and logging work even when the model skips its tools. Tools still serve history, forecasts, extra searches and crew alerts. Go/no-go questions always end with the flight surgeon / mission control line.
-3. **Offline fallback**: used when there's no `HF_TOKEN`, `offline: true`, `ASTRODOC_OFFLINE=1`, or an API error. The bot returns the triage assessment, the countermeasure cards and the top 3 knowledge-base passages. After a network failure it stays offline for 60 s, so the UI doesn't hang.
+3. **Two kinds of chat** (`use_report`):
+   - **Opened after the daily check-in** (`true`): today's health report (triage level, flagged metrics, alerts) is part of every answer in that chat, and go/no-go questions get a verdict from the triage.
+   - **Opened directly** (`false`): no health report and no triage tools. Answers come from the question and the knowledge base only. A go/no-go question gets "complete today's daily check-in" instead of a guess.
+4. **Two model calls at most per message, then quality checks in code** (`chain.py`, `grounding.py`, `prompts.py`):
+   - **Call 1, small model** (`LLM_HELPER_MODEL`, default `openai/gpt-oss-20b`): decides the message type and keeps only the passages, cards and findings that help answer it. The types are greeting, thanks, symptom, log, status, go/no-go, information and other. If no passage is relevant to a symptom or information question, it tries one better search query.
+   - **Fixed replies, no second call:**
+     - greeting, thanks and off-topic messages
+     - a symptom or general question the knowledge base doesn't cover ("contact the crew medical officer")
+     - values logged with nothing to add
+     - go/no-go or status questions in a chat with no health report
+   - **Call 2, main model:** a short core system prompt, half the size of the old one. Only the `<task>` instructions for this message type are sent, with only the tools that type needs; general questions get no tools. Check-in chats get the full health report for symptom, status, log and go/no-go messages, and only the triage level for general questions.
+   - **Code checks, no extra call**, remove sentences that:
+     - claim a finding that doesn't exist (for example "elevated CO₂" when CO₂ was never measured)
+     - contain a number, or a number with its unit, found in no source ("drink 2 L", "CO₂ 28")
+     - give uncited advice made of words found in no source ("use the dental kit")
+     - give a duty verdict nobody asked for
+   - **Go/no-go:** an answer whose yes/no contradicts the triage is replaced. If nothing in the answer survives the checks, the reply says plainly that no reliable answer was found.
+   - **Refs:** list only the sources the answer actually cites.
+5. **Offline fallback**: used when there's no `HF_TOKEN`, `offline: true`, `ASTRODOC_OFFLINE=1`, or an API error. The bot returns the triage assessment, the countermeasure cards and the top 3 knowledge-base passages. After a network failure it stays offline for 60 s, so the UI doesn't hang.
 
 ## Mock storyline (standalone server)
 

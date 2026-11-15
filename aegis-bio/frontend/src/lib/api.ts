@@ -251,8 +251,11 @@ export const api = {
     });
   },
 
-  // AstroDoc AI Flight Surgeon Chat
-  async queryFlightSurgeon(query: string, astronautId: string = "CM-1"): Promise<ChatMessage> {
+  // AstroDoc AI Flight Surgeon Chat.
+  // useReport: true only for a chat opened automatically after the daily check-in, so AstroDoc uses
+  // today's health report. A chat the astronaut opens directly answers from the question and the
+  // knowledge base only (no check-in report).
+  async queryFlightSurgeon(query: string, astronautId: string = "CM-1", useReport: boolean = false): Promise<ChatMessage> {
     const response = await fetch(CHAT_API_URL, {
       method: "POST",
       headers: {
@@ -262,7 +265,7 @@ export const api = {
       body: JSON.stringify({
         query,
         astronaut_id: astronautId,
-        include_current_vitals: true,
+        include_current_vitals: useReport,
       }),
     });
     if (!response.ok) {
@@ -273,11 +276,16 @@ export const api = {
   },
 
   // Voice question: recorded audio -> Whisper speech-to-text -> same answer path as a typed question
-  async voiceQueryFlightSurgeon(audio: Blob, filename: string, astronautId: string): Promise<ChatMessage> {
+  async voiceQueryFlightSurgeon(
+    audio: Blob,
+    filename: string,
+    astronautId: string,
+    useReport: boolean = false
+  ): Promise<ChatMessage> {
     const form = new FormData();
     form.append("audio", audio, filename);
     form.append("astronaut_id", astronautId);
-    form.append("include_current_vitals", "true");
+    form.append("include_current_vitals", String(useReport));
     const response = await fetch(`${API_BASE}/api/chat/voice`, {
       method: "POST",
       headers: { ...getStoredAuthHeaders() }, // no Content-Type: the browser sets the multipart boundary

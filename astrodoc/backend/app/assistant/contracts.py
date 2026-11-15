@@ -156,6 +156,7 @@ class ChatRequest(BaseModel):
     message: str
     history: list[ChatTurn] = Field(default_factory=list)
     offline: bool = False           # dashboard "offline mode" toggle
+    use_report: bool = True         # False when the astronaut opened the chat directly (no check-in report)
 
 
 class GreetRequest(BaseModel):

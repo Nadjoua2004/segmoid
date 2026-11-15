@@ -15,6 +15,9 @@ import { SYMPTOMS, GLUCOSE_CONTEXT, RATINGS } from "@/lib/healthIndicators";
 import { DailyCheckInModal } from "@/components/DailyCheckInModal";
 import { StationLoginPage } from "@/components/StationLoginPage";
 import { HologramModel3D } from "@/components/HologramModel3D";
+import { GuidedTour, type TourStep } from "@/components/GuidedTour";
+import { TourWelcome } from "@/components/TourWelcome";
+import { HelpCircle } from "lucide-react";
 import {
   Button,
   EmptyState,
@@ -39,6 +42,9 @@ const VITAL_RANGES = {
 } as const;
 
 const VITAL_LABELS = ["Heart rate", "SpO₂", "Sleep", "Core temp", "Radiation dose"] as const;
+
+/** Bump the version to show the tour again to everyone after it changes. */
+const TOUR_STORAGE_KEY = "aegis-bio:tour-done:v3";
 
 type ScreenId = "overview" | "daily-checkin" | "crew" | "hazards" | "alerts" | "thresholds";
 
@@ -114,6 +120,9 @@ export default function AegisBioApp() {
   // Floating Chatbot Dialog State
   const [isChatOpen, setIsChatOpen] = useState<boolean>(false);
   const [isChatExpanded, setIsChatExpanded] = useState<boolean>(false);
+  // true while the chat was opened automatically after the daily check-in: AstroDoc then uses today's
+  // health report. Opened from the floating button it stays false (answers from the question + knowledge base).
+  const [chatUsesReport, setChatUsesReport] = useState<boolean>(false);
   const [chatInput, setChatInput] = useState<string>("");
   const [isSendingChat, setIsSendingChat] = useState<boolean>(false);
   const [chatError, setChatError] = useState<string>("");
@@ -165,6 +174,20 @@ export default function AegisBioApp() {
   const [leadFeedback, setLeadFeedback] = useState<string>("");
   const [isModalCheckInOpen, setIsModalCheckInOpen] = useState<boolean>(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+  const [isTourOpen, setIsTourOpen] = useState<boolean>(false);
+  const [isTourWelcomeOpen, setIsTourWelcomeOpen] = useState<boolean>(false);
+
+  // First time someone reaches the dashboard: ask whether they want the guided tour.
+  useEffect(() => {
+    if (!isAuthChecked || !leadToken) return;
+    try {
+      if (localStorage.getItem(TOUR_STORAGE_KEY) === "1") return;
+    } catch {
+      // storage blocked: still offer the tour
+    }
+    const t = setTimeout(() => setIsTourWelcomeOpen(true), 800);
+    return () => clearTimeout(t);
+  }, [isAuthChecked, leadToken]);
   const [justCheckedInAstroIds, setJustCheckedInAstroIds] = useState<string[]>([]);
   const [nowTick, setNowTick] = useState<number>(() => Date.now());
 
@@ -437,6 +460,7 @@ export default function AegisBioApp() {
     setChatHistory([]);
     setChatError("");
     setIsChatOpen(false);
+    setChatUsesReport(false);
     setCrew([]);
     setHistory([]);
     setLatestMetrics(null);
@@ -481,9 +505,10 @@ export default function AegisBioApp() {
     prompt: string
   ) => {
     const chatOwner = myChatAstroId || astroId;
-    // 1. Immediately open and expand the chatbot interface
+    // 1. Immediately open and expand the chatbot interface (this chat uses the check-in report)
     setIsChatOpen(true);
     setIsChatExpanded(true);
+    setChatUsesReport(true);
 
     // 2. Append optimistic user turn so prompt appears immediately
     const userTurn: ChatHistoryItem = {
@@ -498,7 +523,7 @@ export default function AegisBioApp() {
 
     // 3. Query the flight surgeon model for clinical directives & what to do next
     try {
-      const reply = await api.queryFlightSurgeon(prompt, astroId);
+      const reply = await api.queryFlightSurgeon(prompt, astroId, true);
       const assistantTurn: ChatHistoryItem = {
         id: Date.now() + 1,
         astronaut_id: chatOwner,
@@ -723,7 +748,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
     setChatHistory((prev) => [...prev, tempUserMsg]);
 
     try {
-      const reply = await api.queryFlightSurgeon(q, chatOwner);
+      const reply = await api.queryFlightSurgeon(q, chatOwner, chatUsesReport);
       // Append to the current session only (no reload of the full saved history)
       setChatHistory((prev) => [
         ...prev,
@@ -753,6 +778,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
     }
     if (recordTimerRef.current) clearTimeout(recordTimerRef.current);
     setIsChatOpen(false);
+    setChatUsesReport(false); // the next chat opened from the floating button starts without the report
     setChatHistory([]);
     setChatError("");
     setChatInput("");
@@ -769,7 +795,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
         timestamp: new Date().toISOString() },
     ]);
     try {
-      const reply = await api.voiceQueryFlightSurgeon(blob, filename, chatOwner);
+      const reply = await api.voiceQueryFlightSurgeon(blob, filename, chatOwner, chatUsesReport);
       // Replace the placeholder with what was heard, then add the answer (current session only)
       setChatHistory((prev) => [
         ...prev.map((m) => (m.id === tempId ? { ...m, content: `🎤 ${reply.transcript || ""}` } : m)),
@@ -1109,6 +1135,217 @@ Classifier results are ready. What is your clinical evaluation, what specific co
     );
   }
 
+  // Finished, closed or skipped: don't offer the tour automatically again on this device.
+  const markTourSeen = () => {
+    try {
+      localStorage.setItem(TOUR_STORAGE_KEY, "1");
+    } catch {
+      // ignore
+    }
+  };
+
+  const startTour = () => {
+    setIsTourWelcomeOpen(false);
+    setIsModalCheckInOpen(false);
+    setIsTourOpen(true);
+  };
+
+  const skipTour = () => {
+    setIsTourWelcomeOpen(false);
+    markTourSeen();
+  };
+
+  const handleTourClose = () => {
+    setIsTourOpen(false);
+    setIsModalCheckInOpen(false); // the tour may have opened the form or the chat to show them
+    setIsChatOpen(false);
+    markTourSeen();
+  };
+
+  // Each step sets up the UI it needs, so the tour also works when stepping backwards.
+  const showPage = () => {
+    setIsModalCheckInOpen(false);
+    setIsChatOpen(false);
+  };
+  const showNav = () => {
+    showPage();
+    setShowLeftNav(true);
+  };
+  const showOverview = () => {
+    showPage();
+    setActiveScreen("overview");
+  };
+  const showForm = () => {
+    setIsChatOpen(false);
+    setIsModalCheckInOpen(true);
+  };
+  const showChat = () => {
+    setIsModalCheckInOpen(false);
+    setIsChatExpanded(false);
+    setIsChatOpen(true);
+  };
+  const tourSteps: TourStep[] = [
+    {
+      target: '[data-tour="nav"]',
+      title: "Navigation",
+      description:
+        "Move between the main screens here. You can hide this sidebar with the panel button at the top left.",
+      placement: "right",
+      before: showNav,
+    },
+    {
+      target: '[data-tour="nav-checkin"]',
+      title: "Daily check-in",
+      description:
+        "Log your vitals, sleep, exercise, nutrition and symptoms once a day. The AI assessment uses it to spot health risks early.",
+      placement: "right",
+      before: showNav,
+    },
+    ...(leadProfile?.is_lead
+      ? [
+          {
+            target: '[data-tour="nav-crew"]',
+            title: "Manage crew (admin only)",
+            description:
+              "Only the crew lead sees this. Add crew members, give them station keys, and see who has checked in today.",
+            placement: "right" as const,
+            before: showNav,
+          },
+        ]
+      : []),
+    {
+      target: '[data-tour="nav-alerts"]',
+      title: "Alerts",
+      description:
+        "Every medical alert raised for you or your crew. The red badge counts alerts still waiting to be acknowledged.",
+      placement: "right",
+      before: showNav,
+    },
+    {
+      target: '[data-tour="log-checkin"]',
+      title: "Log today’s check-in",
+      description: "The quickest way to start your daily check-in from the Overview.",
+      placement: "bottom",
+      before: showOverview,
+    },
+    {
+      target: 'section[aria-label="3D Astronaut Biometric Hologram"]',
+      title: "Body status model",
+      description:
+        "A 3D view of your latest readings. Its colour follows your overall status: nominal, watch or critical.",
+      placement: "right",
+      before: showOverview,
+    },
+    {
+      target: '[data-tour="trend"]',
+      title: "Vital trends",
+      description: "Follow SpO₂, heart rate and sleep across your recent readings. Switch metric with the tabs.",
+      placement: "right",
+      before: showOverview,
+    },
+    {
+      target: '[data-tour="forecast"]',
+      title: "Health forecast",
+      description:
+        "Projects where your vitals are heading over the next day, week or month, with predicted risks and countermeasures.",
+      placement: "top",
+      before: showOverview,
+    },
+    {
+      target: '[data-tour="refresh"]',
+      title: "Refresh data",
+      description: "Reload the latest readings from the station server.",
+      placement: "bottom",
+      before: showPage,
+    },
+    {
+      target: '[data-tour="notifications"]',
+      title: "Notifications",
+      description:
+        "Opens the side panel with check-in reminders, active alarms and crew status. The badge counts what needs your attention.",
+      placement: "bottom",
+      before: showPage,
+    },
+    // --- The daily check-in form (general overview, not field by field) ---
+    {
+      target: '[data-tour="checkin-title"]',
+      title: "The daily check-in form",
+      description:
+        "This is the form you fill in once a day. It takes about 6 minutes and keeps your health record up to date.",
+      placement: "bottom",
+      before: showForm,
+    },
+    {
+      target: '[data-tour="checkin-progress"]',
+      title: "Six short sections",
+      description:
+        "Vitals, sleep, activity, environment and symptoms, then a final review. The bar shows where you are; tap a section to jump to it.",
+      placement: "bottom",
+      before: showForm,
+    },
+    {
+      target: '[data-tour="checkin-body"]',
+      title: "Answer each section",
+      description:
+        "Every question is required. As you enter readings, each one is marked Nominal, Watch or Critical so problems stand out straight away.",
+      placement: "auto",
+      before: showForm,
+    },
+    {
+      target: '[data-tour="checkin-footer"]',
+      title: "Move on and submit",
+      description:
+        "Use Back and Next to move between sections. Your draft is saved on this device, so you can stop and finish later. After the review, submit to get an AI health assessment.",
+      placement: "top",
+      before: showForm,
+    },
+    {
+      target: '[data-tour="chat"]',
+      title: "AstroDoc assistant",
+      description:
+        "Open the AI flight surgeon from this button, wherever you are in the app.",
+      placement: "left",
+      before: showPage,
+    },
+    // --- Inside the chat ---
+    {
+      target: '[data-tour="chat-messages"]',
+      title: "Your conversation",
+      description:
+        "AstroDoc answers here, using NASA health guidance and your latest vitals. Sources are listed under each answer.",
+      placement: "left",
+      before: showChat,
+    },
+    {
+      target: '[data-tour="chat-input"]',
+      title: "Ask a question",
+      description: "Type a question, for example “My SpO₂ is 93%, what should I do?”, then press Send.",
+      placement: "top",
+      before: showChat,
+    },
+    {
+      target: '[data-tour="chat-voice"]',
+      title: "Ask by voice",
+      description: "Tap the microphone and speak, then tap ■ to send. Handy when your hands are busy.",
+      placement: "top",
+      before: showChat,
+    },
+    {
+      target: '[data-tour="chat-controls"]',
+      title: "Expand or close",
+      description: "Expand the chat for longer answers. Closing it clears the conversation.",
+      placement: "left",
+      before: showChat,
+    },
+    {
+      target: '[data-tour="tour-help"]',
+      title: "Replay this tour",
+      description: "Click here any time to see this guide again.",
+      placement: "bottom",
+      before: showPage,
+    },
+  ];
+
   return (
     <div
       style={{
@@ -1141,6 +1378,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
           }}
         >
           <nav
+            data-tour="nav"
             aria-label="Main"
             style={{
               width: "100%",
@@ -1186,7 +1424,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                   strokeLinejoin="round"
                 />
               </svg>
-              <span style={{ fontWeight: 600 }}>Apex</span>
+              <span style={{ fontWeight: 600 }}>APEX</span>
             </button>
 
             {/* Pinned */}
@@ -1262,6 +1500,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
 
               <button
                 type="button"
+                data-tour="nav-checkin"
                 onClick={() => setActiveScreen("daily-checkin")}
                 style={{
                   display: "flex",
@@ -1303,6 +1542,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
               {leadProfile?.is_lead && (
                 <button
                   type="button"
+                  data-tour="nav-crew"
                   onClick={() => setActiveScreen("crew")}
                   style={{
                     display: "flex",
@@ -1359,6 +1599,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
 
               <button
                 type="button"
+                data-tour="nav-alerts"
                 onClick={() => setActiveScreen("alerts")}
                 style={{
                   display: "flex",
@@ -1472,7 +1713,31 @@ Classifier results are ready. What is your clinical evaluation, what specific co
           >
             <button
               type="button"
+              data-tour="tour-help"
+              onClick={startTour}
+              aria-label="Start guided tour"
+              title="Guided tour"
+              style={{
+                width: "36px",
+                height: "36px",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                border: "none",
+                borderRadius: "8px",
+                background: "transparent",
+                cursor: "pointer",
+                color: "#FFFFFF",
+              }}
+            >
+              <HelpCircle size={20} strokeWidth={1.5} aria-hidden="true" />
+            </button>
+
+            <button
+              type="button"
+              data-tour="refresh"
               onClick={() => loadAllData()}
+              aria-label="Refresh from backend"
               title="Refresh from backend"
               style={{
                 width: "36px",
@@ -1511,6 +1776,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
 
             <button
               type="button"
+              data-tour="notifications"
               onClick={() => setShowRightPanel((v) => !v)}
               aria-label="Notifications"
               aria-expanded={showRightPanel}
@@ -1651,7 +1917,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                       : "No readings logged yet."}
                   </p>
                 </div>
-                <Button variant="primary" onClick={() => setActiveScreen("daily-checkin")}>
+                <Button variant="primary" data-tour="log-checkin" onClick={() => setActiveScreen("daily-checkin")}>
                   Log daily check-in
                 </Button>
               </header>
@@ -1679,7 +1945,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                     />
                   </div>
 
-                  <Panel aria-labelledby="trend-title">
+                  <Panel aria-labelledby="trend-title" data-tour="trend">
                     <PanelHeader
                       titleId="trend-title"
                       title="Trend"
@@ -1838,6 +2104,12 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                     spo2={latestMetrics?.spo2 ?? null}
                     sleepHours={latestMetrics?.sleep_hours ?? null}
                     radiationMsv={latestMetrics?.radiation_msv ?? null}
+                    bpSys={latestMetrics?.bp_sys ?? null}
+                    bpDia={latestMetrics?.bp_dia ?? null}
+                    coreTempC={latestMetrics?.core_temp_c ?? null}
+                    bloodGlucose={latestMetrics?.blood_glucose ?? null}
+                    hrvRmssd={latestMetrics?.hrv_rmssd ?? null}
+                    moodScore={latestMetrics?.mood_score ?? null}
                   />
 
                   <Panel aria-labelledby="envelope-title" className="flex-1">
@@ -2037,7 +2309,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
               </div>
 
               {/* Vital forecast (full-width below the 3-column biometric stage) */}
-              <Panel aria-labelledby="forecast-title" aria-busy={isLoadingForecast}>
+              <Panel aria-labelledby="forecast-title" aria-busy={isLoadingForecast} data-tour="forecast">
                 <PanelHeader
                   titleId="forecast-title"
                   title="Vital forecast"
@@ -4208,33 +4480,104 @@ Classifier results are ready. What is your clinical evaluation, what specific co
       {!isChatOpen && (
         <button
           type="button"
+          data-tour="chat"
           onClick={() => setIsChatOpen(true)}
-          aria-label="Open AstroDoc AI Flight Surgeon"
-          title="Open AstroDoc AI Flight Surgeon"
+          aria-label="Open Astro Medical AI Assistant"
+          title="Chat with Astro — Your Medical AI Assistant"
+          className="bio-focus group"
           style={{
             position: "fixed",
-            bottom: "24px",
-            right: showRightPanel ? "304px" : "24px",
+            bottom: "28px",
+            right: showRightPanel ? "352px" : "84px",
             zIndex: 60,
-            width: "52px",
-            height: "52px",
+            width: "64px",
+            height: "64px",
             borderRadius: "50%",
-            background: "#131720",
-            color: "#5EEAD4",
-            border: "1px solid #232B3B",
+            border: "none",
+            padding: 0,
+            background: "transparent",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
             cursor: "pointer",
-            boxShadow: "0 8px 24px rgba(0,0,0,0.45)",
+            animation: "astroFloat 3.2s ease-in-out infinite",
           }}
         >
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-            <rect x="4" y="6" width="16" height="12" rx="4" stroke="#5EEAD4" strokeWidth="1.8" />
-            <path d="M12 3 V6" stroke="#5EEAD4" strokeWidth="1.8" strokeLinecap="round" />
-            <circle cx="9.5" cy="12" r="1.3" fill="#2DD4BF" />
-            <circle cx="14.5" cy="12" r="1.3" fill="#2DD4BF" />
-          </svg>
+          {/* Outer glowing iridescent aura */}
+          <span
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              inset: "-4px",
+              borderRadius: "50%",
+              background:
+                "conic-gradient(from 0deg, #10e89a, #fbbf24, #fb7185, #60a5fa, #2dd4bf, #10e89a)",
+              filter: "blur(8px)",
+              opacity: 0.72,
+              animation: "astroSpinCW 7s linear infinite",
+            }}
+          />
+          {/* Crisp luminous ring */}
+          <span
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              inset: 0,
+              borderRadius: "50%",
+              padding: "3px",
+              background:
+                "conic-gradient(from 0deg, #10e89a, #fbbf24, #fb7185, #60a5fa, #2dd4bf, #10e89a)",
+              animation: "astroSpinCW 7s linear infinite",
+            }}
+          />
+          {/* Dark emerald glass sphere core */}
+          <span
+            aria-hidden="true"
+            style={{
+              position: "relative",
+              width: "54px",
+              height: "54px",
+              borderRadius: "50%",
+              background:
+                "radial-gradient(circle at 35% 30%, #115e59 0%, #072226 58%, #03090c 100%)",
+              boxShadow: "inset 0 0 14px rgba(16, 232, 154, 0.38)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              overflow: "hidden",
+            }}
+          >
+            {/* Moving pill eyes looking left and right */}
+            <span
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "9px",
+                animation: "astroEyesLook 6.5s ease-in-out infinite",
+              }}
+            >
+              <span
+                style={{
+                  width: "5px",
+                  height: "13px",
+                  borderRadius: "999px",
+                  background: "#ECFEFF",
+                  boxShadow: "0 0 8px rgba(16, 232, 154, 0.9)",
+                  animation: "astroEyeBlink 5.2s ease-in-out infinite",
+                }}
+              />
+              <span
+                style={{
+                  width: "5px",
+                  height: "13px",
+                  borderRadius: "999px",
+                  background: "#ECFEFF",
+                  boxShadow: "0 0 8px rgba(16, 232, 154, 0.9)",
+                  animation: "astroEyeBlink 5.2s ease-in-out infinite",
+                }}
+              />
+            </span>
+          </span>
         </button>
       )}
 
@@ -4245,7 +4588,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
           style={{
             position: "fixed",
             bottom: "24px",
-            right: showRightPanel ? "304px" : "24px",
+            right: showRightPanel ? "352px" : "84px",
             zIndex: 60,
             width: isChatExpanded ? "min(840px, calc(100vw - 32px))" : "min(400px, calc(100vw - 32px))",
             height: isChatExpanded ? "min(720px, calc(100vh - 48px))" : "min(540px, calc(100vh - 48px))",
@@ -4272,43 +4615,51 @@ Classifier results are ready. What is your clinical evaluation, what specific co
           >
             <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
               <span
+                aria-hidden="true"
                 style={{
-                  width: "28px",
-                  height: "28px",
+                  position: "relative",
+                  width: "32px",
+                  height: "32px",
                   borderRadius: "50%",
-                  background: "rgba(45, 212, 191, 0.12)",
-                  border: "1px solid rgba(45, 212, 191, 0.3)",
-                  color: "#5EEAD4",
+                  padding: "2px",
+                  background:
+                    "conic-gradient(from 0deg, #10e89a, #fbbf24, #fb7185, #60a5fa, #2dd4bf, #10e89a)",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
                 }}
               >
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                  <rect
-                    x="4"
-                    y="6"
-                    width="16"
-                    height="12"
-                    rx="4"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                  />
-                  <circle cx="9.5" cy="12" r="1.4" fill="currentColor" />
-                  <circle cx="14.5" cy="12" r="1.4" fill="currentColor" />
-                </svg>
+                <span
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    borderRadius: "50%",
+                    background: "radial-gradient(circle at 35% 30%, #115e59 0%, #05161a 100%)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: "5px",
+                  }}
+                >
+                  <span style={{ width: "3px", height: "8px", borderRadius: "999px", background: "#ECFEFF" }} />
+                  <span style={{ width: "3px", height: "8px", borderRadius: "999px", background: "#ECFEFF" }} />
+                </span>
               </span>
               <div>
                 <div style={{ fontWeight: 600, fontSize: "14px", color: "#F1F5F9" }}>
-                  AstroDoc Flight Surgeon
+                  Astro · Medical Assistant
                 </div>
-                <div style={{ fontSize: "11px", color: "#94A3B8" }}>
-                  NASA RAG Clinical Assistant{myChatAstroId ? ` · ${myChatAstroId}` : ""}
-                </div>
+                {(myChatAstroId || chatUsesReport) && (
+                  <div style={{ fontSize: "11px", color: "#94A3B8" }}>
+                    {myChatAstroId}
+                    {myChatAstroId && chatUsesReport ? " · " : ""}
+                    {chatUsesReport ? "using today's check-in" : ""}
+                  </div>
+                )}
               </div>
             </div>
 
-            <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <div data-tour="chat-controls" style={{ display: "flex", alignItems: "center", gap: "6px" }}>
               {/* Expand / Collapse Icon Button */}
               <button
                 type="button"
@@ -4384,6 +4735,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
 
           {/* Messages List */}
           <div
+            data-tour="chat-messages"
             style={{
               flex: 1,
               overflowY: "auto",
@@ -4422,13 +4774,85 @@ Classifier results are ready. What is your clinical evaluation, what specific co
               <div
                 style={{
                   margin: "auto",
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
                   textAlign: "center",
-                  color: "#64748B",
-                  fontSize: "13px",
-                  maxWidth: "260px",
+                  gap: "12px",
+                  padding: "12px",
+                  maxWidth: "300px",
                 }}
               >
-                Ask AstroDoc about crew vitals, radiation protocols, SpO₂ drops, or countermeasures.
+                <div
+                  aria-hidden="true"
+                  style={{
+                    position: "relative",
+                    width: "56px",
+                    height: "56px",
+                    borderRadius: "50%",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    animation: "astroFloat 3.2s ease-in-out infinite",
+                  }}
+                >
+                  <span
+                    style={{
+                      position: "absolute",
+                      inset: "-3px",
+                      borderRadius: "50%",
+                      background:
+                        "conic-gradient(from 0deg, #10e89a, #fbbf24, #fb7185, #60a5fa, #2dd4bf, #10e89a)",
+                      filter: "blur(6px)",
+                      opacity: 0.7,
+                      animation: "astroSpinCW 7s linear infinite",
+                    }}
+                  />
+                  <span
+                    style={{
+                      position: "relative",
+                      width: "50px",
+                      height: "50px",
+                      borderRadius: "50%",
+                      background:
+                        "radial-gradient(circle at 35% 30%, #115e59 0%, #072226 60%, #03090c 100%)",
+                      border: "2px solid rgba(16, 232, 154, 0.55)",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: "flex",
+                        gap: "8px",
+                        animation: "astroEyesLook 6.5s ease-in-out infinite",
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: "4px",
+                          height: "11px",
+                          borderRadius: "999px",
+                          background: "#ECFEFF",
+                          animation: "astroEyeBlink 5.2s ease-in-out infinite",
+                        }}
+                      />
+                      <span
+                        style={{
+                          width: "4px",
+                          height: "11px",
+                          borderRadius: "999px",
+                          background: "#ECFEFF",
+                          animation: "astroEyeBlink 5.2s ease-in-out infinite",
+                        }}
+                      />
+                    </span>
+                  </span>
+                </div>
+                <div style={{ fontSize: "15px", fontWeight: 600, color: "#F1F5F9" }}>
+                  Hi! I&apos;m Astro, your medical assistant.
+                </div>
               </div>
             )}
             {chatError && (
@@ -4451,9 +4875,11 @@ Classifier results are ready. What is your clinical evaluation, what specific co
           >
             <input
               type="text"
+              data-tour="chat-input"
+              aria-label="Message AstroDoc"
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
-              placeholder={isRecording ? "Listening… click ■ to send" : "Ask AstroDoc..."}
+              placeholder={isRecording ? "Listening… click ■ to send" : "Ask Astro..."}
               style={{
                 flex: 1,
                 height: "38px",
@@ -4468,6 +4894,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
             />
             <button
               type="button"
+              data-tour="chat-voice"
               onClick={handleToggleRecording}
               disabled={isSendingChat && !isRecording}
               title={isRecording ? "Stop and send" : "Ask by voice"}
@@ -4506,6 +4933,10 @@ Classifier results are ready. What is your clinical evaluation, what specific co
           </form>
         </div>
       )}
+
+      {/* First-login welcome prompt & interactive Guided Tour */}
+      <TourWelcome open={isTourWelcomeOpen} onAccept={startTour} onSkip={skipTour} />
+      <GuidedTour steps={tourSteps} open={isTourOpen} onClose={handleTourClose} />
 
       {/* Guided ISS-Grade Multi-Step Check-in Modal */}
       <DailyCheckInModal
