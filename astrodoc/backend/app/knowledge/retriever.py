@@ -19,6 +19,52 @@ COLLECTION = "hrp_kb"
 MAX_PER_DOC = 2
 
 
+_EMBEDDING = None
+_EMBEDDING_LOCK = threading.Lock()
+
+
+def shared_embedding_function():
+    """all-MiniLM-L6-v2 (the model the knowledge base was built with), loaded ONCE for the whole process.
+    Callable: list of texts -> list of vectors; pass the vectors to Chroma (query_embeddings=, embeddings=).
+
+    Why not let Chroma embed: its DefaultEmbeddingFunction creates a new ONNXMiniLM_L6_V2 on every call, so
+    each search re-reads the 90 MB model (a ~130 MB memory spike and ~0.5 s each time), and a collection
+    rebuilds that default from its stored settings even when another function is passed. The Aegis-Bio
+    backend's own small collection uses this same instance, so one copy of the model serves the server."""
+    global _EMBEDDING
+    with _EMBEDDING_LOCK:
+        if _EMBEDDING is None:
+            try:
+                _EMBEDDING = _low_memory_minilm()
+            except Exception as e:      # chromadb internals changed: the plain model still works
+                log.warning("low-memory embedding setup unavailable (%s); using the plain model", e)
+                from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2
+                _EMBEDDING = ONNXMiniLM_L6_V2()
+        return _EMBEDDING
+
+
+def _low_memory_minilm():
+    """Same model and vectors, with ONNX Runtime's memory pool off and one thread (512 MB / 0.1 CPU hosts)."""
+    from functools import cached_property
+    from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2
+
+    class LowMemoryMiniLM(ONNXMiniLM_L6_V2):
+        @cached_property
+        def model(self):
+            so = self.ort.SessionOptions()
+            so.log_severity_level = 3
+            so.graph_optimization_level = self.ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            so.enable_cpu_mem_arena = False
+            so.enable_mem_pattern = False
+            so.intra_op_num_threads = 1
+            so.inter_op_num_threads = 1
+            return self.ort.InferenceSession(
+                os.path.join(self.DOWNLOAD_PATH, self.EXTRACTED_FOLDER_NAME, "model.onnx"),
+                providers=["CPUExecutionProvider"], sess_options=so)
+
+    return LowMemoryMiniLM()
+
+
 def embedding_model_ready() -> bool:
     """True when all-MiniLM-L6-v2 is already on disk. The retriever never
     downloads at runtime (that would hang a Wi-Fi-off demo); ingest does."""
@@ -37,6 +83,7 @@ class KnowledgeBase:
         self._ready = False
         self.backend = "empty"
         self._col = None
+        self._embed = None
         self._chunks: list[dict] = []
         self._vec = None
         self._matrix = None
@@ -51,11 +98,10 @@ class KnowledgeBase:
             if self.mode in ("auto", "chroma") and CHROMA_DIR.exists() and embedding_model_ready():
                 try:
                     import chromadb
-                    from chromadb.utils import embedding_functions
                     client = chromadb.PersistentClient(path=str(CHROMA_DIR))
-                    self._col = client.get_collection(
-                        COLLECTION, embedding_function=embedding_functions.DefaultEmbeddingFunction())
-                    self._col.query(query_texts=["radiation"], n_results=1)  # warm-up / sanity check
+                    self._col = client.get_collection(COLLECTION)
+                    self._embed = shared_embedding_function()      # see why: shared_embedding_function()
+                    self._col.query(query_embeddings=self._embed(["radiation"]), n_results=1)  # warm-up
                     self.backend = "chroma"
                 except Exception as e:
                     log.warning("Chroma unavailable (%s); falling back to TF-IDF", e)
@@ -107,7 +153,8 @@ class KnowledgeBase:
         return out
 
     def _search_chroma(self, query: str, n: int, kind: Optional[str]) -> list[dict]:
-        res = self._col.query(query_texts=[query], n_results=n, where={"kind": kind} if kind else None)
+        res = self._col.query(query_embeddings=self._embed([query]), n_results=n,
+                              where={"kind": kind} if kind else None)
         hits = []
         for cid, doc, meta, dist in zip(res["ids"][0], res["documents"][0], res["metadatas"][0], res["distances"][0]):
             text = doc.split("\n", 1)[1] if "\n" in doc else doc

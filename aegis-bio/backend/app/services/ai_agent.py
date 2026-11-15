@@ -95,6 +95,7 @@ class AIAgentService:
     def __init__(self):
         self.chroma_client = None
         self.collection = None
+        self._embed = None
         self.astrodoc_bot = None
         self._initialize_vector_db()
         self._initialize_astrodoc_model()
@@ -166,6 +167,18 @@ class AIAgentService:
             "photo_readings": photo.readings if photo else [],
         }
 
+    @staticmethod
+    def _shared_embedding_function():
+        """Reuse AstroDoc's embedding model instead of loading a second copy (~100 MB): needed to fit the
+        512 MB Render free plan. Without AstroDoc, Chroma's default embedding function is used as before."""
+        try:
+            from app.services.astrodoc_bridge import load_astrodoc
+            load_astrodoc()
+            from astrodoc_app.knowledge.retriever import shared_embedding_function
+            return shared_embedding_function()
+        except Exception:
+            return None
+
     def _initialize_vector_db(self):
         """Initializes ChromaDB vector collection with NASA HRP medical knowledge."""
         try:
@@ -177,13 +190,17 @@ class AIAgentService:
             self.collection = self.chroma_client.get_or_create_collection(
                 name="nasa_hrp_clinical_guidelines"
             )
-            
+            # With AstroDoc loaded, vectors come from its single shared model (see _shared_embedding_function)
+            self._embed = self._shared_embedding_function()
+
             # Check if documents already populated
             if self.collection.count() == 0:
+                documents = [doc["content"] for doc in NASA_HRP_CORPUS]
                 self.collection.add(
-                    documents=[doc["content"] for doc in NASA_HRP_CORPUS],
+                    documents=documents,
                     metadatas=[{"title": doc["title"], "source": doc["source"]} for doc in NASA_HRP_CORPUS],
-                    ids=[doc["id"] for doc in NASA_HRP_CORPUS]
+                    ids=[doc["id"] for doc in NASA_HRP_CORPUS],
+                    **({"embeddings": self._embed(documents)} if self._embed else {}),
                 )
         except Exception as e:
             # Fallback for lightweight runtime without vector dependencies
@@ -195,7 +212,7 @@ class AIAgentService:
         if self.collection:
             try:
                 results = self.collection.query(
-                    query_texts=[query],
+                    **({"query_embeddings": self._embed([query])} if self._embed else {"query_texts": [query]}),
                     n_results=top_k
                 )
                 retrieved = []
