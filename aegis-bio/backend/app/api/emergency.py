@@ -62,20 +62,8 @@ def get_emergency_status(
     ).order_by(TelemetryLog.mission_day.desc(), TelemetryLog.id.desc()).first()
 
     if latest:
-        metrics = HealthMetrics(
-            astronaut_id=latest.astronaut_id,
-            mission_day=latest.mission_day,
-            timestamp=latest.timestamp,
-            heart_rate=latest.heart_rate,
-            bp_sys=latest.bp_sys,
-            bp_dia=latest.bp_dia,
-            spo2=latest.spo2,
-            sleep_hours=latest.sleep_hours,
-            radiation_msv=latest.radiation_msv,
-            blood_glucose=latest.blood_glucose,
-            mood_score=latest.mood_score
-        )
-        triage = evaluate_multi_hazard_triage(metrics)
+        from app.services.telemetry_metrics import health_metrics_from_log
+        triage = evaluate_multi_hazard_triage(health_metrics_from_log(db, latest))
         if triage.requires_emergency_escalation:
             contact_info = get_astronaut_contact_info(db, latest.astronaut_id)
             timeout_sec = contact_info["alert_timeout_seconds"]

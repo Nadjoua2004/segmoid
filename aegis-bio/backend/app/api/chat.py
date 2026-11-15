@@ -3,7 +3,7 @@ Clinical Chat & Flight Surgeon RAG API
 Provides interactive queries and proactive autonomous flight surgeon recommendations.
 """
 from typing import Optional
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -28,6 +28,21 @@ def _resolve_chat_owner(
     return cleaned or None
 
 
+HISTORY_TURNS = 6  # earlier messages given to the assistant so follow-up questions keep their context
+
+
+def _recent_history(db: Session, chat_owner: str) -> list[dict]:
+    rows = (
+        db.query(ChatHistoryModel)
+        .filter(ChatHistoryModel.astronaut_id == chat_owner)
+        .order_by(ChatHistoryModel.timestamp.desc(), ChatHistoryModel.id.desc())
+        .limit(HISTORY_TURNS)
+        .all()
+    )
+    return [{"role": r.role, "content": r.content} for r in reversed(rows)
+            if r.role in ("user", "assistant") and r.content]
+
+
 @router.post("/query", response_model=ChatMessage)
 def query_flight_surgeon(
     payload: ChatQuery,
@@ -39,6 +54,32 @@ def query_flight_surgeon(
     Grounds answers in NASA Human Research Program (HRP) guidelines and current astronaut telemetry.
     Chat turns are isolated per member account.
     """
+    return _answer_and_record(payload, db, current_user)
+
+
+@router.post("/voice", response_model=ChatMessage)
+def voice_query_flight_surgeon(
+    audio: UploadFile = File(..., description="Recorded question (webm, ogg, wav, mp3, m4a)"),
+    astronaut_id: str = Form("ASTRO-7702-HELENA"),
+    include_current_vitals: bool = Form(True),
+    db: Session = Depends(get_db),
+    current_user: Optional[UserModel] = Depends(get_optional_current_user),
+):
+    """
+    Voice question: transcribed with open-source Whisper (AstroDoc speech-to-text), then answered
+    and stored exactly like a typed question. The response includes `transcript`.
+    """
+    try:
+        text = ai_agent_service.transcribe(audio.file.read(), audio.filename or "speech.webm", audio.content_type)
+    except ai_agent_service.SpeechError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+    payload = ChatQuery(query=text, astronaut_id=astronaut_id, include_current_vitals=include_current_vitals)
+    message = _answer_and_record(payload, db, current_user)
+    message.transcript = text
+    return message
+
+
+def _answer_and_record(payload: ChatQuery, db: Session, current_user: Optional[UserModel]) -> ChatMessage:
     chat_owner = _resolve_chat_owner(current_user, payload.astronaut_id) or payload.astronaut_id
     telemetry_target = (
         payload.astronaut_id
@@ -63,6 +104,9 @@ def query_flight_surgeon(
                 "mood_score": latest.mood_score
             }
 
+    # Earlier turns of this member's thread (read before the new message is stored)
+    history = _recent_history(db, chat_owner)
+
     # Record user message under this member's private thread only
     user_record = ChatHistoryModel(
         astronaut_id=chat_owner,
@@ -72,7 +116,7 @@ def query_flight_surgeon(
     db.add(user_record)
 
     # Generate response scoped to this member
-    result = ai_agent_service.answer_query(payload.query, context_vitals, chat_owner)
+    result = ai_agent_service.answer_query(payload.query, context_vitals, chat_owner, history=history)
 
     # Record assistant message under this member's private thread only
     asst_record = ChatHistoryModel(
@@ -140,20 +184,8 @@ def get_proactive_clinical_dialogue(
     ).order_by(TelemetryLog.mission_day.desc(), TelemetryLog.id.desc()).first()
 
     if latest:
-        metrics = HealthMetrics(
-            astronaut_id=latest.astronaut_id,
-            mission_day=latest.mission_day,
-            timestamp=latest.timestamp,
-            heart_rate=latest.heart_rate,
-            bp_sys=latest.bp_sys,
-            bp_dia=latest.bp_dia,
-            spo2=latest.spo2,
-            sleep_hours=latest.sleep_hours,
-            radiation_msv=latest.radiation_msv,
-            blood_glucose=latest.blood_glucose,
-            mood_score=latest.mood_score
-        )
-        triage = evaluate_multi_hazard_triage(metrics)
+        from app.services.telemetry_metrics import health_metrics_from_log
+        triage = evaluate_multi_hazard_triage(health_metrics_from_log(db, latest))
         triage_dict = {
             "astronaut_id": triage.astronaut_id,
             "overall_status": triage.overall_status,

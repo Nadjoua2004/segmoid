@@ -49,3 +49,21 @@ def test_extract_rejects_implausible_and_negated():
 def test_extract_fahrenheit_converted():
     (x,) = extract_measurements("temperature 101.3")
     assert x.metric == "temp_c" and x.value == pytest.approx(38.5, abs=0.1)
+
+
+@pytest.mark.parametrize("text", [
+    "i am spelling blood what does that mean",       # typo of "spitting"
+    "I am spitting blood", "coughing up blood since this morning", "I threw up blood",
+    "there is blood in my urine", "my spit has blood", "my hand is bleeding a lot",
+])
+def test_bleeding_red_flags(text):
+    hit = detect(text)
+    assert hit is not None and hit.id == "bleeding"
+
+
+@pytest.mark.parametrize("text", [
+    "what is my blood pressure", "blood sugar is 90", "blood glucose 65",
+    "I donated blood before the mission", "no coughing blood, just a cough",
+])
+def test_blood_words_that_are_not_red_flags(text):
+    assert detect(text) is None

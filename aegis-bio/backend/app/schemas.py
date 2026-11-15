@@ -252,6 +252,7 @@ class ChatMessage(BaseModel):
     content: str
     timestamp: datetime = Field(default_factory=datetime.utcnow)
     citations: Optional[List[str]] = None
+    transcript: Optional[str] = None  # voice questions: what the speech-to-text heard
 
 
 # =========================================================

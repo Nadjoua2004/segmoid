@@ -16,7 +16,7 @@ HAZARD_TOPICS = {
     "radiation": ["radiation"],
     "isolation": ["fatigue", "mood"],
     "gravity": ["cardiovascular"],
-    "hostile environment": ["spo2", "fever"],
+    "hostile environment": ["co2", "spo2", "fever"],
     "distance": ["glucose"],
 }
 

@@ -262,7 +262,7 @@ def run_agent_background_prediction(astronaut_id: str):
     from app.database import SessionLocal
     from app.models import TelemetryLog
     from app.services.predictor import calculate_trajectory_forecast
-    from app.services.alarm_service import alarm_service
+    from app.services.alarm_service import create_alarm_from_prediction
 
     db = SessionLocal()
     try:
@@ -300,14 +300,19 @@ def run_agent_background_prediction(astronaut_id: str):
         # 3. Check for projected critical deterioration
         if weekly_pred.alert_triggered or (weekly_pred.cardiovascular_strain_score and weekly_pred.cardiovascular_strain_score > 70):
             print(f"[HealthPredictorAgent Background] ⚠️ Critical strain predicted for {astronaut_id} in weekly horizon!")
-            alarm_service.trigger_alarm(
-                db,
-                astronaut_id=astronaut_id,
-                severity="CRITICAL",
-                message=f"Autonomous Agent Forecast Alert: Predicted critical cardiovascular strain ({weekly_pred.primary_strain_indicator}) within 7-day tactical window.",
-                source="AGENT_BACKGROUND_FORECASTER",
-                actions=[weekly_pred.recommended_countermeasure] if weekly_pred.recommended_countermeasure else None
-            )
+            # create_alarm_from_prediction() checks the forecast scores, skips duplicates of an open
+            # alarm, routes it to the closest crewmate and syncs it to Supabase.
+            prediction = (weekly_pred.model_dump(mode="json") if hasattr(weekly_pred, "model_dump")
+                          else dict(vars(weekly_pred)))
+            prediction["health_outlook"] = "CRITICAL"
+            if weekly_pred.recommended_countermeasure:
+                prediction.setdefault("clinical_directives", [])
+                prediction["clinical_directives"] = list(prediction["clinical_directives"] or []) + [{
+                    "urgency": "IMMEDIATE",
+                    "category": f"Predicted {weekly_pred.primary_strain_indicator}",
+                    "action": weekly_pred.recommended_countermeasure,
+                }]
+            create_alarm_from_prediction(db, astronaut_id, prediction)
 
         print(f"[HealthPredictorAgent Background] Autonomous forecast completed for {astronaut_id} (Weekly CSI: {weekly_pred.cardiovascular_strain_score:.1f})")
     except Exception as e:

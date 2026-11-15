@@ -210,6 +210,7 @@ export interface ChatMessage {
   content: string;
   timestamp?: string;
   citations?: string[];
+  transcript?: string | null; // voice questions: what speech-to-text heard
 }
 
 export interface ProactiveChatPayload {

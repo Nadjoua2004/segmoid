@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { api, CrewSummaryItem, ChatHistoryItem } from "@/lib/api";
 import {
   HealthMetrics,
@@ -117,6 +117,10 @@ export default function AegisBioApp() {
   const [chatInput, setChatInput] = useState<string>("");
   const [isSendingChat, setIsSendingChat] = useState<boolean>(false);
   const [chatError, setChatError] = useState<string>("");
+  // Voice input (MediaRecorder -> /api/chat/voice -> Whisper)
+  const [isRecording, setIsRecording] = useState<boolean>(false);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recordTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Live Database State (Starts empty when database is empty)
   const [crew, setCrew] = useState<CrewSummaryItem[]>([]);
@@ -326,7 +330,8 @@ export default function AegisBioApp() {
         api.getTrajectoryForecast(targetAstro, horizon, targetScale),
         api.getEmergencyStatus(targetAstro),
         api.getAllAlarms(targetAstro),
-        myId ? api.getChatHistory(myId) : Promise.resolve([]),
+        // Chat is not reloaded from saved history: the panel only shows the current session
+        // (messages since it was opened), and is cleared when it is closed.
       ]);
 
       if (results[0].status === "fulfilled") setCrew(results[0].value.crew || []);
@@ -346,7 +351,6 @@ export default function AegisBioApp() {
       if (results[4].status === "fulfilled") setForecast(results[4].value || null);
       if (results[5].status === "fulfilled") setActiveAlert(results[5].value || null);
       if (results[6].status === "fulfilled") setAllAlarms(results[6].value || []);
-      if (results[7].status === "fulfilled") setChatHistory(results[7].value || []);
     },
     [selectedAstroId, timeScale, leadProfile, leadToken]
   );
@@ -720,26 +724,104 @@ Classifier results are ready. What is your clinical evaluation, what specific co
 
     try {
       const reply = await api.queryFlightSurgeon(q, chatOwner);
-      const updatedChat = await api.getChatHistory(chatOwner).catch(() => null);
-      if (updatedChat && updatedChat.length > 0) {
-        setChatHistory(updatedChat);
-      } else {
-        setChatHistory((prev) => [
-          ...prev,
-          {
-            id: Date.now() + 1,
-            astronaut_id: chatOwner,
-            role: "assistant",
-            content: reply.content,
-            citations: reply.citations || [],
-            timestamp: reply.timestamp || new Date().toISOString(),
-          },
-        ]);
-      }
+      // Append to the current session only (no reload of the full saved history)
+      setChatHistory((prev) => [
+        ...prev,
+        {
+          id: Date.now() + 1,
+          astronaut_id: chatOwner,
+          role: "assistant",
+          content: reply.content,
+          citations: reply.citations || [],
+          timestamp: reply.timestamp || new Date().toISOString(),
+        },
+      ]);
     } catch (err: any) {
       setChatError(err.message || "Unable to reach AstroDoc backend.");
     } finally {
       setIsSendingChat(false);
+    }
+  };
+
+  // Closing the chat ends the conversation: the next time it opens, it starts empty
+  const handleCloseChat = () => {
+    if (recorderRef.current) {
+      recorderRef.current.onstop = null; // discard a recording in progress instead of sending it
+      recorderRef.current.stream.getTracks().forEach((t) => t.stop());
+      recorderRef.current = null;
+      setIsRecording(false);
+    }
+    if (recordTimerRef.current) clearTimeout(recordTimerRef.current);
+    setIsChatOpen(false);
+    setChatHistory([]);
+    setChatError("");
+    setChatInput("");
+  };
+
+  // Voice question to AstroDoc: click 🎤 to record, click ■ to send (auto-stops after 30 s)
+  const sendVoiceChat = async (blob: Blob, filename: string, chatOwner: string) => {
+    setIsSendingChat(true);
+    setChatError("");
+    const tempId = Date.now();
+    setChatHistory((prev) => [
+      ...prev,
+      { id: tempId, astronaut_id: chatOwner, role: "user", content: "🎤 Transcribing…", citations: [],
+        timestamp: new Date().toISOString() },
+    ]);
+    try {
+      const reply = await api.voiceQueryFlightSurgeon(blob, filename, chatOwner);
+      // Replace the placeholder with what was heard, then add the answer (current session only)
+      setChatHistory((prev) => [
+        ...prev.map((m) => (m.id === tempId ? { ...m, content: `🎤 ${reply.transcript || ""}` } : m)),
+        { id: tempId + 1, astronaut_id: chatOwner, role: "assistant", content: reply.content,
+          citations: reply.citations || [], timestamp: reply.timestamp || new Date().toISOString() },
+      ]);
+    } catch (err: any) {
+      setChatHistory((prev) => prev.filter((m) => m.id !== tempId));
+      setChatError(`Voice: ${err.message || "could not reach AstroDoc."} You can type your question instead.`);
+    } finally {
+      setIsSendingChat(false);
+    }
+  };
+
+  const handleToggleRecording = async () => {
+    if (recorderRef.current) {
+      recorderRef.current.stop();
+      return;
+    }
+    const chatOwner = myChatAstroId || selectedAstroId;
+    if (!chatOwner) {
+      setChatError("Sign in to chat with AstroDoc.");
+      return;
+    }
+    if (typeof window === "undefined" || !navigator.mediaDevices || typeof MediaRecorder === "undefined") {
+      setChatError("Voice input is not supported in this browser (use Chrome or Edge).");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mime = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/webm", "audio/mp4"].find(
+        (t) => MediaRecorder.isTypeSupported(t)
+      );
+      const recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = (ev) => ev.data.size && chunks.push(ev.data);
+      recorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        if (recordTimerRef.current) clearTimeout(recordTimerRef.current);
+        recorderRef.current = null;
+        setIsRecording(false);
+        const type = recorder.mimeType || "audio/webm";
+        const ext = type.includes("ogg") ? "ogg" : type.includes("mp4") ? "m4a" : "webm";
+        sendVoiceChat(new Blob(chunks, { type }), `question.${ext}`, chatOwner);
+      };
+      recorderRef.current = recorder;
+      recorder.start();
+      setIsRecording(true);
+      setChatError("");
+      recordTimerRef.current = setTimeout(() => recorderRef.current?.stop(), 30000);
+    } catch (err: any) {
+      setChatError(`Microphone unavailable: ${err.message || err}`);
     }
   };
 
@@ -863,7 +945,38 @@ Classifier results are ready. What is your clinical evaluation, what specific co
         )
       : "";
 
-  const velocityAbs = Math.abs(Number(forecast?.trend_velocity || 0));
+  // ---- Forecast fields as the backend sends them (PredictionResult in backend/app/schemas.py) ----
+  const forecastPoints: any[] = forecast?.projected_trajectory ?? forecast?.trajectory ?? [];
+  const cvRisk = Number(forecast?.cardiovascular_strain_score ?? 0); // 0-100
+  const cogRisk = Number(forecast?.cognitive_degradation_risk ?? 0); // 0-100
+  const inflectionDay: number | null = forecast?.critical_inflection_day ?? null;
+  const earlyWarnings: string[] = forecast?.early_warnings ?? [];
+  // Same thresholds the backend uses to raise a forecast alarm (backend/app/api/predict.py)
+  const forecastAlert: boolean =
+    forecast?.alert_triggered ?? (cvRisk >= 65 || cogRisk >= 75 || inflectionDay != null);
+  const riskLevel = (score: number, high: number) =>
+    score >= high ? "CRITICAL" : score >= high * 0.6 ? "MEDIUM" : "NORMAL";
+  const trendVelocity: number | null =
+    forecast?.trend_velocity ??
+    (forecastPoints.length > 1
+      ? (Number(forecastPoints[forecastPoints.length - 1].heart_rate_predicted) -
+          Number(forecastPoints[0].heart_rate_predicted)) /
+        (forecastPoints.length - 1)
+      : null);
+  const mainStrain: string =
+    forecast?.primary_strain_indicator ??
+    (Math.max(cvRisk, cogRisk) < 30
+      ? "Nominal vital envelope"
+      : cogRisk >= cvRisk
+      ? `Fatigue / cognitive risk ${cogRisk.toFixed(0)}/100`
+      : `Cardiovascular strain ${cvRisk.toFixed(0)}/100`);
+  const forecastAdvice: string | null =
+    forecast?.recommended_countermeasure ??
+    (inflectionDay != null
+      ? `A critical turning point is projected at Sol ${inflectionDay}. Review the trend with the crew medical officer and start the countermeasures for the highest risk now.`
+      : earlyWarnings[0] ?? null);
+  const forecastDays = history.length; // logged telemetry rows the model was fitted on
+  const velocityAbs = Math.abs(Number(trendVelocity || 0));
   const trendTone =
     velocityAbs > 0.5
       ? "text-bio-critical"
@@ -1971,41 +2084,115 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                     <dt className="text-bio-xs text-bio-text-muted">Trend velocity</dt>
                     <dd className={`mt-bio-1 text-bio-sm font-semibold ${trendTone}`}>
                       <span className="font-mono">
-                        {forecast?.trend_velocity != null
-                          ? `${Number(forecast.trend_velocity).toFixed(3)} per step`
-                          : "—"}
+                        {trendVelocity != null ? `${Number(trendVelocity).toFixed(2)} bpm per step` : "—"}
                       </span>
-                      {forecast?.trend_velocity != null && (
-                        <span className="ml-bio-2 font-normal">{trendWord}</span>
-                      )}
+                      {trendVelocity != null && <span className="ml-bio-2 font-normal">{trendWord}</span>}
                     </dd>
                   </div>
                   <div className="rounded-bio-md border border-bio-border bg-bio-surface-elevated p-bio-3">
                     <dt className="text-bio-xs text-bio-text-muted">Main strain</dt>
-                    <dd className="mt-bio-1 text-bio-sm font-semibold text-bio-text">
-                      {forecast?.primary_strain_indicator || "Nominal vital envelope"}
-                    </dd>
+                    <dd className="mt-bio-1 text-bio-sm font-semibold text-bio-text">{mainStrain}</dd>
                   </div>
                   <div className="rounded-bio-md border border-bio-border bg-bio-surface-elevated p-bio-3">
                     <dt className="text-bio-xs text-bio-text-muted">Alarm outlook</dt>
                     <dd className="mt-bio-1">
                       <StatusBadge
-                        status={forecast?.alert_triggered ? "CRITICAL" : "NORMAL"}
-                        label={forecast?.alert_triggered ? "Escalation predicted" : "Within thresholds"}
+                        status={forecastAlert ? "CRITICAL" : "NORMAL"}
+                        label={forecastAlert ? "Escalation predicted" : "Within thresholds"}
                       />
                     </dd>
                   </div>
                 </dl>
 
-                {forecast?.trajectory && forecast.trajectory.length > 0 ? (
+                {/* Predicted health risks: what the time-series model projects if current trends continue */}
+                {forecast && forecastPoints.length > 0 && (
+                  <section aria-labelledby="predicted-risks-title" className="flex flex-col gap-bio-3">
+                    <div className="flex flex-wrap items-baseline justify-between gap-bio-2">
+                      <h3 id="predicted-risks-title" className="text-bio-sm font-medium text-bio-text-secondary">
+                        Predicted health risks
+                      </h3>
+                      <span className="text-bio-xs text-bio-text-muted">
+                        Projection if current trends continue · based on {forecastDays} logged day
+                        {forecastDays === 1 ? "" : "s"}
+                        {forecast?.r2_fit_quality != null ? ` · fit R² ${Number(forecast.r2_fit_quality).toFixed(2)}` : ""}
+                      </span>
+                    </div>
+                    <ul className="grid grid-cols-1 gap-bio-3 min-[520px]:grid-cols-2">
+                      {[
+                        {
+                          label: "Cardiovascular deconditioning",
+                          hint: "Heart-rate and blood-pressure strain from fluid shifts and reduced gravity",
+                          score: cvRisk,
+                          high: 65,
+                        },
+                        {
+                          label: "Fatigue / cognitive decline",
+                          hint: "Sleep loss, mood and recovery projected over the horizon",
+                          score: cogRisk,
+                          high: 75,
+                        },
+                      ].map((r) => {
+                        const lvl = riskLevel(r.score, r.high);
+                        const bar =
+                          lvl === "CRITICAL" ? "bg-bio-critical" : lvl === "MEDIUM" ? "bg-bio-warning" : "bg-bio-nominal";
+                        return (
+                          <li
+                            key={r.label}
+                            className="flex flex-col gap-bio-2 rounded-bio-md border border-bio-border bg-bio-surface-elevated p-bio-3"
+                          >
+                            <div className="flex items-center justify-between gap-bio-2">
+                              <span className="text-bio-sm font-semibold text-bio-text">{r.label}</span>
+                              <StatusBadge
+                                status={lvl}
+                                label={`${r.score.toFixed(0)}/100 · ${lvl === "CRITICAL" ? "High" : lvl === "MEDIUM" ? "Elevated" : "Low"}`}
+                              />
+                            </div>
+                            <div
+                              className="h-2 w-full overflow-hidden rounded-full bg-bio-border"
+                              role="meter"
+                              aria-label={`${r.label} risk`}
+                              aria-valuemin={0}
+                              aria-valuemax={100}
+                              aria-valuenow={Math.round(r.score)}
+                            >
+                              <div className={`h-full ${bar}`} style={{ width: `${Math.min(100, Math.max(0, r.score))}%` }} />
+                            </div>
+                            <span className="text-bio-xs text-bio-text-muted">{r.hint}</span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    {inflectionDay != null && (
+                      <p className="rounded-bio-md border border-bio-critical-border bg-bio-critical-bg p-bio-3 text-bio-sm text-bio-text">
+                        <span className="font-semibold text-bio-critical">Critical turning point projected at Sol {inflectionDay}.</span>{" "}
+                        If nothing changes, a vital is expected to cross its critical threshold around that day.
+                      </p>
+                    )}
+                    {earlyWarnings.length > 0 && (
+                      <ul className="flex flex-col gap-bio-1 text-bio-sm text-bio-text">
+                        {earlyWarnings.map((w, i) => (
+                          <li key={i}>⚠ {w}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {forecastDays < 7 && (
+                      <p className="text-bio-xs text-bio-warning">
+                        Low confidence: the model has only {forecastDays} logged day{forecastDays === 1 ? "" : "s"}, so the
+                        projection mostly repeats the latest values. Log daily check-ins to see real trends.
+                      </p>
+                    )}
+                  </section>
+                )}
+
+                {forecastPoints.length > 0 ? (
                   <div className="flex flex-col gap-bio-3">
                     <h3 className="text-bio-sm font-medium text-bio-text-secondary">
-                      Projected points ({forecast.trajectory.length} steps, up to 8 shown)
+                      Projected points ({forecastPoints.length} steps, up to 8 shown)
                     </h3>
                     <ul className="grid grid-cols-2 gap-bio-3 min-[520px]:grid-cols-3 xl:grid-cols-4">
-                      {forecast.trajectory
+                      {forecastPoints
                         .filter((_, idx) => {
-                          const total = forecast.trajectory?.length || 0;
+                          const total = forecastPoints.length || 0;
                           if (total <= 8) return true;
                           const step = Math.ceil(total / 8);
                           return idx % step === 0 || idx === total - 1;
@@ -2029,14 +2216,28 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                                 95% CI {Math.round(pt.lower_ci_heart_rate)}–{Math.round(pt.upper_ci_heart_rate)}
                               </span>
                             )}
+                            {pt.sleep_predicted != null && (
+                              <span className="font-mono text-bio-xs text-bio-text-secondary">
+                                Sleep {Number(pt.sleep_predicted).toFixed(1)} h
+                              </span>
+                            )}
                             <span
                               className={`font-mono text-bio-xs ${
-                                pt.cardiovascular_strain_index > 0.6 ? "text-bio-critical" : "text-bio-nominal"
+                                pt.cardiovascular_strain_index >= 65 ? "text-bio-critical" : "text-bio-nominal"
                               }`}
                             >
-                              Strain {Number(pt.cardiovascular_strain_index).toFixed(2)}
-                              {pt.cardiovascular_strain_index > 0.6 ? " (high)" : ""}
+                              Strain {Number(pt.cardiovascular_strain_index).toFixed(0)}/100
+                              {pt.cardiovascular_strain_index >= 65 ? " (high)" : ""}
                             </span>
+                            {pt.cognitive_readiness_index != null && (
+                              <span
+                                className={`font-mono text-bio-xs ${
+                                  pt.cognitive_readiness_index < 40 ? "text-bio-critical" : "text-bio-text-secondary"
+                                }`}
+                              >
+                                Readiness {Number(pt.cognitive_readiness_index).toFixed(0)}/100
+                              </span>
+                            )}
                           </li>
                         ))}
                     </ul>
@@ -2048,7 +2249,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                   />
                 )}
 
-                {forecast?.recommended_countermeasure && (
+                {forecastAdvice && (
                   <div className="flex items-start gap-bio-3 rounded-bio-md border border-bio-primary-glow bg-bio-primary-subtle p-bio-4">
                     <svg
                       className="mt-bio-1 h-4 w-4 shrink-0 text-bio-primary"
@@ -2060,7 +2261,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                     </svg>
                     <div className="flex flex-col gap-bio-1">
                       <h3 className="text-bio-xs font-semibold text-bio-primary">Recommended countermeasure</h3>
-                      <p className="max-w-[65ch] text-bio-sm text-bio-text">{forecast.recommended_countermeasure}</p>
+                      <p className="max-w-[65ch] text-bio-sm text-bio-text">{forecastAdvice}</p>
                     </div>
                   </div>
                 )}
@@ -4153,9 +4354,9 @@ Classifier results are ready. What is your clinical evaluation, what specific co
               {/* Close Button */}
               <button
                 type="button"
-                onClick={() => setIsChatOpen(false)}
+                onClick={handleCloseChat}
                 aria-label="Close chat"
-                title="Close"
+                title="Close (clears this conversation)"
                 style={{
                   width: "32px",
                   height: "32px",
@@ -4252,7 +4453,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
               type="text"
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
-              placeholder="Ask AstroDoc..."
+              placeholder={isRecording ? "Listening… click ■ to send" : "Ask AstroDoc..."}
               style={{
                 flex: 1,
                 height: "38px",
@@ -4265,6 +4466,26 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                 outline: "none",
               }}
             />
+            <button
+              type="button"
+              onClick={handleToggleRecording}
+              disabled={isSendingChat && !isRecording}
+              title={isRecording ? "Stop and send" : "Ask by voice"}
+              aria-label={isRecording ? "Stop recording and send" : "Ask AstroDoc by voice"}
+              style={{
+                height: "38px",
+                minWidth: "42px",
+                padding: "0 10px",
+                borderRadius: "8px",
+                border: `1px solid ${isRecording ? "#EF4444" : "#232B3B"}`,
+                background: isRecording ? "rgba(239, 68, 68, 0.15)" : "#0C0E12",
+                color: isRecording ? "#FCA5A5" : "#F1F5F9",
+                fontSize: "14px",
+                cursor: "pointer",
+              }}
+            >
+              {isRecording ? "■" : "🎤"}
+            </button>
             <button
               type="submit"
               disabled={isSendingChat}

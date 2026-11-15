@@ -162,7 +162,8 @@ def test_llm_answer_without_tools_still_cites_and_logs(provider, kb):
 def test_llm_eva_answer_gets_final_call_line(provider, kb):
     bot, _ = llm_bot(provider, kb, [answer("Your radiation and fatigue risks are flagged Warning; rest first.")])
     res = bot.chat("sara", "Can I still do the EVA tomorrow?")
-    assert res.reply.endswith("The final go/no-go decision belongs to the flight surgeon / mission control.")
+    assert res.reply.startswith("Not yet: your triage is Warning")               # verdict forced first
+    assert res.reply.endswith("the flight surgeon / mission control confirms the final go/no-go.")
     assert res.countermeasures["protocol"]
 
 
@@ -260,3 +261,90 @@ def test_400_retry_drops_tools_and_reasoning_effort(provider, kb):
     bot.chat("lin", "hello")
     assert "tools" in client.requests[0] and "extra_body" in client.requests[0]
     assert "tools" not in client.requests[1] and "extra_body" not in client.requests[1]
+
+
+def test_tool_call_written_as_text_is_removed(provider, kb):
+    leaked = ("Stand down from the EVA [S1].\n\n(triggering crew alert for unacknowledged critical alert)\n"
+              '<trigger_crew_alert alert_id="ALT-D35-1"/>\n\nNext step: rest now.')
+    bot, _ = llm_bot(provider, kb, [answer(leaked)])
+    reply = bot.chat("sara", "status?").reply
+    assert "<" not in reply and "triggering" not in reply
+    assert reply.startswith("Stand down from the EVA [S1].") and "Next step: rest now." in reply
+
+
+# ---------------------------------------------------------- go / no-go ---
+from app.assistant.chain import _is_go_no_go  # noqa: E402
+from app.assistant.contracts import MetricLevel, Triage  # noqa: E402
+from app.assistant.prompts import go_no_go  # noqa: E402
+
+
+@pytest.mark.parametrize("q,expected", [
+    ("am i allowed to go in a mission ?", True),
+    ("Can I still do the EVA tomorrow?", True),
+    ("is it safe to exercise today", True),
+    ("Am I fit for duty?", True),
+    ("what is my mission average dose?", False),
+    ("I have a headache", False),
+])
+def test_go_no_go_detection(q, expected):
+    assert _is_go_no_go(q) is expected
+
+
+def test_go_no_go_verdicts():
+    co2 = MetricLevel(metric="cabin_co2", level="Warning", value=2.6, unit="mmHg")
+    assert go_no_go(Triage(astronaut_id="a", mission_day=1, level="Nominal"))[0] == "YES"
+    v, s = go_no_go(Triage(astronaut_id="a", mission_day=1, level="Nominal", metric_levels=[co2]))
+    assert v == "YES, WITH A CONDITION" and s.startswith("Yes, you can go") and "cabin CO2" in s
+    assert go_no_go(Triage(astronaut_id="a", mission_day=1, level="Warning"))[0] == "NOT YET"
+    assert go_no_go(Triage(astronaut_id="a", mission_day=1, level="Critical"))[1].startswith("No, not today")
+
+
+def test_mission_question_gets_verdict_block_and_clear_answer(provider, kb):
+    bot, client = llm_bot(provider, kb, [answer("Commander, not yet: rest and shield first [S1].")])
+    res = bot.chat("sara", "am i allowed to go in a mission ?")
+    assert "<go_no_go>" in client.requests[0]["messages"][-1]["content"]
+    assert res.reply.startswith("Commander, not yet")                      # model answered: nothing prepended
+    assert "flight surgeon" in res.reply
+
+
+def test_offline_mission_question_starts_with_verdict(provider, kb):
+    res = offline_bot(provider, kb).chat("sara", "am i allowed to go in a mission ?")
+    assert res.reply.startswith("Not yet: your triage is Warning")
+
+
+def test_italic_asterisks_removed(provider, kb):
+    bot, _ = llm_bot(provider, kb, [answer("*Protocols* - ventilate the module [S1].")])
+    assert bot.chat("lin", "what now?").reply.startswith("Protocols - ventilate")
+
+
+def test_answer_starting_with_yes_is_not_duplicated(provider, kb):
+    bot, _ = llm_bot(provider, kb, [answer("Yes, you can go once you rest [S1].")])
+    reply = bot.chat("lin", "am i allowed to go in a mission ?").reply
+    assert reply.startswith("Yes, you can go once you rest") and reply.count("Yes, you can go") == 1
+
+
+def test_only_earlier_questions_are_sent_not_old_answers(provider, kb):
+    bot, client = llm_bot(provider, kb, [answer("Rest now [S1].")])
+    history = [ChatTurn(role="user", content="am i allowed to go in a mission ?"),
+               ChatTurn(role="assistant", content="Yes, you can go. Shielding - No extra shielding needed.")]
+    bot.chat("lin", "and what about tomorrow?", history)
+    msgs = client.requests[0]["messages"]
+    assert [m["role"] for m in msgs] == ["system", "user"]
+    content = msgs[1]["content"]
+    assert "<earlier_questions>" in content and "am i allowed to go in a mission ?" in content
+    assert "Yes, you can go" not in content and "No extra shielding" not in content
+
+
+def test_filler_countermeasure_lines_removed(provider, kb):
+    reply = ("Ventilate the module [S1].\n\nCountermeasures\nProtocols - Check the scrubber [S1].\n"
+             "Shielding – No additional radiation shielding needed.\nDiet – No specific dietary changes required.")
+    bot, _ = llm_bot(provider, kb, [answer(reply)])
+    out = bot.chat("lin", "what now?").reply
+    assert "Shielding" not in out and "Diet" not in out and "Protocols - Check the scrubber [S1]." in out
+
+
+def test_spitting_blood_goes_to_red_flag_not_llm(provider, kb):
+    bot, client = llm_bot(provider, kb, [])
+    res = bot.chat("sara", "i am spelling blood what does that mean")
+    assert res.mode == "redflag" and res.level == "Critical" and res.red_flag.id == "bleeding"
+    assert client.requests == [] and "Yes, you can" not in res.reply

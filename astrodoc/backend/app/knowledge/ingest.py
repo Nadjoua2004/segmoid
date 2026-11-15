@@ -18,8 +18,8 @@ import unicodedata
 from collections import Counter
 from pathlib import Path
 
-from app.assistant.countermeasures import load_cards
-from app.assistant.paths import CHROMA_DIR, CHUNKS_FILE, DOCS_DIR, KB_DIR
+from ..assistant.countermeasures import load_cards
+from ..assistant.paths import CHROMA_DIR, CHUNKS_FILE, DOCS_DIR, KB_DIR
 
 COLLECTION = "hrp_kb"
 # all-MiniLM-L6-v2 truncates input at 256 word pieces, so chunks of ~300 tokens

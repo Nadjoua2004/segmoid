@@ -12,7 +12,7 @@ import os
 import threading
 from typing import Optional
 
-from app.assistant.paths import CHROMA_DIR, CHUNKS_FILE
+from ..assistant.paths import CHROMA_DIR, CHUNKS_FILE
 
 log = logging.getLogger(__name__)
 COLLECTION = "hrp_kb"

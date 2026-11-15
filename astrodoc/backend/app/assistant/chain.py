@@ -26,7 +26,8 @@ from .countermeasures import card_by_id, cards_for_triage, dedupe, group_cards
 from .data_provider import AstroDataProvider
 from .extract import extract_measurements
 from .llm import DEFAULT_MODEL, HFChatLLM, LLMError
-from .prompts import FINAL_CALL, GO_NO_GO_WORDS, HAZARD_WORDS, SYSTEM_PROMPT, address, turn_context
+from .prompts import (FINAL_CALL, GO_NO_GO_ACTIVITY, GO_NO_GO_INTENT, GO_NO_GO_PHRASES, HAZARD_WORDS, SYSTEM_PROMPT,
+                      address, go_no_go, go_no_go_block, turn_context)
 from .redflags import detect
 from .tools import ToolSession, tool_definitions
 
@@ -42,7 +43,7 @@ class AstroDocAssistant:
     def __init__(self, provider: AstroDataProvider, kb=None, llm: Optional[HFChatLLM] = None,
                  offline: Optional[bool] = None):
         if kb is None:
-            from app.knowledge.retriever import get_kb
+            from ..knowledge.retriever import get_kb
             kb = get_kb()
         self.provider = provider
         self.kb = kb
@@ -128,7 +129,7 @@ class AstroDocAssistant:
                             red_flag=RedFlagInfo(id=hit.id, label=hit.label, matched=hit.matched),
                             actions=[SuggestedAction(id="alert_crew", label="Alert crew now"),
                                      SuggestedAction(id="acknowledge", label="I'm OK – acknowledged")],
-                            notice=f"Alert {alert.id} created")
+                            notice=f"Alert {alert.id} active: acknowledge it or the crew is alerted")
         self._attach_cards(resp, cards)
         return resp
 
@@ -138,11 +139,13 @@ class AstroDocAssistant:
         aid = ctx.astronaut.id
         logged = [self.provider.log_measurement(aid, x.metric, x.value, x.note, source="chat")
                   for x in extract_measurements(message)]
-        cards = cards_for_triage(triage) if triage.level != "Nominal" else []
+        cards = cards_for_triage(triage)       # cards for any flagged metric, even when overall Nominal
         passages = self.kb.search(message, k=6)
         resp = ChatResponse(reply="", mode="offline", level=triage.level, logged=logged, notice=notice)
         self._attach_cards(resp, cards)
-        if _is_go_no_go(message) or triage.level == "Critical":
+        if _is_go_no_go(message):
+            parts = [go_no_go(triage)[1], self._assessment(ctx, triage, cards, short=True)]
+        elif triage.level == "Critical":
             parts = [self._assessment(ctx, triage, cards, short=True)]
         else:
             parts = [self._brief(ctx, triage)]
@@ -176,14 +179,19 @@ class AstroDocAssistant:
         if not proactive:
             for x in extract_measurements(message):
                 session.logged.append(self.provider.log_measurement(aid, x.metric, x.value, x.note, source="chat"))
-        cards = cards_for_triage(triage) if triage.level != "Nominal" else []
+        cards = cards_for_triage(triage)       # cards for any flagged metric, even when overall Nominal
         session.cards = list(cards)
         passages = self.kb.search(" ".join(triage.reasons) if proactive else message, k=3)
         parts = [turn_context(ctx, triage), knowledge_block(session, cards, passages)]
         if session.logged:
             parts.append("<already_logged>\n" + "\n".join(lm.label for lm in session.logged) + "\n</already_logged>")
+        if not proactive and _is_go_no_go(message):
+            parts.append(go_no_go_block(triage))
+        earlier = _earlier_questions(history)
+        if earlier:
+            parts.append(earlier)
         parts.append(f"<astronaut_message>\n{message}\n</astronaut_message>")
-        messages = [{"role": "system", "content": SYSTEM_PROMPT}, *_history_messages(history),
+        messages = [{"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": "\n\n".join(parts)}]
 
         reply = None
@@ -216,8 +224,15 @@ class AstroDocAssistant:
         resp = ChatResponse(reply=text, mode="llm", level=triage.level, citations=cites, logged=session.logged,
                             crew_alert_triggered=session.crew_alert is not None)
         self._attach_cards(resp, session.cards)
-        if _is_go_no_go(message) and "flight surgeon" not in text.lower():
-            resp.reply += f"\n\n{FINAL_CALL}"
+        if _is_go_no_go(message):
+            # The question must get a clear answer: if the model did not open with it, put it first.
+            answer_re = r"(yes|no|not yet|not today)\b"
+            start = text.strip().lower()
+            after_name = re.sub(r"^[^,:]{0,40}[,:]\s*", "", start, count=1)      # "Commander, yes ..."
+            if not (re.match(answer_re, start) or re.match(answer_re, after_name)):
+                resp.reply = f"{go_no_go(triage)[1]}\n\n{resp.reply}"
+            if "flight surgeon" not in text.lower():
+                resp.reply += f"\n\n{FINAL_CALL}"
         resp.actions = self._actions(ctx, triage)
         return resp
 
@@ -317,8 +332,19 @@ def _clean_reply(text: str) -> str:
     """Strip reasoning tags some open models leak and markdown emphasis/headings;
     normalise grouped citations "[S2, S3]" to "[S2][S3]"."""
     text = re.sub(r"<think>.*?</think>", "", text or "", flags=re.S)
+    # tool calls an open model wrote as text instead of calling the tool: <trigger_crew_alert .../>,
+    # <tool_call>...</tool_call>, "(triggering crew alert ...)" - the astronaut must never see these
+    text = re.sub(r"<(tool_call|function_call|function)[^>]*>.*?</\1>", "", text, flags=re.S | re.I)
+    text = re.sub(r"</?[a-z_]+(?:\s+[a-z_]+=\"[^\"]*\")*\s*/?>", "", text, flags=re.I)
+    text = re.sub(r"^\s*\((?:calling|triggering|invoking|using|running)\b[^)\n]*\)\s*$", "", text, flags=re.M | re.I)
+    # filler countermeasure lines such as "Shielding - No additional shielding needed."
+    text = re.sub(r"^[ \t]*[*\-•]?[ \t]*\**(?:protocols?|diet|shielding)\**[ \t]*[–—:\-][ \t]*(?:no|none|not)\b[^\n]*"
+                  r"(?:needed|required|necessary|changes?)[^\n]*$", "", text, flags=re.M | re.I)
+    text = re.sub(r"\n{3,}", "\n\n", text)
     text = re.sub(r"^#+\s*", "", text, flags=re.M)
     text = re.sub(r"\*\*(.+?)\*\*", r"\1", text)
+    text = re.sub(r"(?<![\w*])\*(?=\S)([^*\n]+?)(?<=\S)\*(?![\w*])", r"\1", text)   # *italic*
+    text = re.sub(r"(?<!\w)_(?=\S)([^_\n]+?)(?<=\S)_(?!\w)", r"\1", text)           # _italic_
     text = re.sub(r"\[(S\d+(?:\s*[,;]\s*S\d+)+)\]",
                   lambda m: "".join(f"[{s.strip()}]" for s in re.split(r"[,;]", m.group(1))), text)
     text = re.sub(r"[ \t]+\n", "\n", text)
@@ -326,22 +352,24 @@ def _clean_reply(text: str) -> str:
 
 
 def _is_go_no_go(message: str) -> bool:
-    m = message.lower()
-    return any(re.search(rf"\b{re.escape(w)}\b", m) for w in GO_NO_GO_WORDS)
+    m = " " + re.sub(r"\s+", " ", message.lower().replace("’", "'")) + " "
+
+    def has(words):
+        return any(re.search(rf"(?<!\w){re.escape(w)}(?!\w)", m) for w in words)
+    return has(GO_NO_GO_PHRASES) or (has(GO_NO_GO_INTENT) and has(GO_NO_GO_ACTIVITY))
 
 
-def _history_messages(history: list[ChatTurn]) -> list[dict]:
-    """Earlier turns as plain text, alternating roles, starting with a user turn."""
-    msgs: list[dict] = []
-    for t in history[-HISTORY_TURNS:]:
-        if not t.content.strip():
-            continue
-        if msgs and msgs[-1]["role"] == t.role:
-            msgs[-1]["content"] += "\n\n" + t.content
-        else:
-            msgs.append({"role": t.role, "content": t.content})
-    if msgs and msgs[0]["role"] == "assistant":
-        msgs.insert(0, {"role": "user", "content": "(AstroDoc AI panel opened)"})
-    if msgs and msgs[-1]["role"] == "user":       # the new message must follow an assistant turn
-        msgs.append({"role": "assistant", "content": "(no reply)"})
-    return msgs
+EARLIER_QUESTIONS = 3
+
+
+def _earlier_questions(history: list[ChatTurn]) -> str:
+    """The astronaut's previous questions only, as context for follow-ups.
+    Earlier *answers* are deliberately left out: open models copy their own old wording
+    (verdicts, filler, wrong numbers) into answers to new, unrelated questions."""
+    questions = [re.sub(r"\s+", " ", t.content).strip()[:200] for t in history[-HISTORY_TURNS:]
+                 if t.role == "user" and t.content.strip()][-EARLIER_QUESTIONS:]
+    if not questions:
+        return ""
+    lines = "\n".join(f"- {q}" for q in questions)
+    return ("<earlier_questions>\nContext only (for follow-ups like \"and tomorrow?\"); do not answer these again:\n"
+            f"{lines}\n</earlier_questions>")

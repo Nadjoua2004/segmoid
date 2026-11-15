@@ -116,6 +116,27 @@
       "source": "exercise_paper", "demoProtocol": false
     },
     {
+      "id": "co2-warn-protocol", "priority": 1, "topic": "co2", "hazard": "Hostile environment", "level": "Warning", "group": "protocol",
+      "title": "Cabin CO2 above normal: ventilate and check the scrubber",
+      "steps": [
+        "Check the CO2 reading for your module and the CO2 scrubber status.",
+        "Increase ventilation or move to a well-ventilated module; CO2 can collect where air does not circulate.",
+        "NASA's limit is a 1-hour average of 3 mmHg (NASA-STD-3001): report readings that stay above it.",
+        "Watch for headache, fatigue or shortness of breath - early signs of CO2 exposure - and report them."
+      ],
+      "source": "tb_co2", "demoProtocol": false
+    },
+    {
+      "id": "co2-crit-protocol", "priority": 0, "topic": "co2", "hazard": "Hostile environment", "level": "Critical", "group": "protocol",
+      "title": "High cabin CO2: leave the module and alert the crew",
+      "steps": [
+        "Move to a module with normal CO2 readings now.",
+        "Alert the crew and mission control; follow the onboard atmosphere contingency procedure.",
+        "Check SpO2 and report headache, dizziness or shortness of breath to the crew medical officer."
+      ],
+      "source": "tb_co2", "demoProtocol": true
+    },
+    {
       "id": "spo2-warn-protocol", "topic": "spo2", "hazard": "Hostile environment", "level": "Warning", "group": "protocol",
       "title": "Low SpO2: rest, re-measure, check cabin air",
       "steps": [

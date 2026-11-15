@@ -16,12 +16,14 @@ from .data_provider import AstroDataProvider
 from .metrics_meta import FORECAST_TARGETS, LOGGABLE_METRICS, METRICS, SYMPTOM_METRIC, in_plausible_range
 
 HAZARDS = ["Radiation", "Isolation", "Distance", "Gravity", "Hostile environment"]
-TOPICS = ["radiation", "fatigue", "cardiovascular", "spo2", "glucose", "fever", "mood"]
+TOPICS = ["radiation", "fatigue", "cardiovascular", "co2", "spo2", "glucose", "fever", "mood"]
 
 
 def tool_definitions(crew_ids: list[str]) -> list[dict]:
     """Tools in the OpenAI function-calling format used by Hugging Face Inference Providers."""
-    astro = {"type": "string", "enum": crew_ids, "description": "Crew member id, e.g. the one in <turn_context>."}
+    astro = {"type": "string", "description": "Crew member id, e.g. the astronaut_id in <turn_context>."}
+    if crew_ids:                       # a host app may start with an empty crew list
+        astro["enum"] = crew_ids
 
     def tool(name: str, description: str, props: dict, required: list[str]) -> dict:
         return {"type": "function", "function": {

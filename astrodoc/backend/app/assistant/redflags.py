@@ -43,10 +43,12 @@ def detect(text: str) -> Optional[RedFlagHit]:
     norm = _normalize(text)
     flags, negations = _config()
     for flag in flags:
-        for phrase in flag["phrases"]:
-            for m in re.finditer(rf"\b{re.escape(phrase.lower())}\b", norm):
+        # literal phrases, plus optional regex "patterns" (typo-tolerant wording, e.g. "spelling blood")
+        matchers = [rf"\b{re.escape(p.lower())}\b" for p in flag.get("phrases", [])] + flag.get("patterns", [])
+        for rx in matchers:
+            for m in re.finditer(rx, norm):
                 if not _negated(norm, m.start(), negations):
-                    return RedFlagHit(id=flag["id"], label=flag["label"], matched=phrase,
+                    return RedFlagHit(id=flag["id"], label=flag["label"], matched=m.group(0),
                                       guidance=flag["guidance"], cards=tuple(flag.get("cards", [])),
                                       metric_hint=flag.get("metric_hint"))
     return None

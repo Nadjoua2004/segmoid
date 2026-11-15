@@ -210,14 +210,16 @@ def evaluate_multi_hazard_triage(metrics: HealthMetrics) -> TriageResult:
     # 5. HAZARD: Hostile Closed Environment (ECLSS, SpO2, CO2)
     # -------------------------------------------------------------
     spo2 = metrics.spo2
-    co2 = metrics.cabin_co2_mmhg or 2.8
+    co2 = metrics.cabin_co2_mmhg          # None = not measured: never substitute a default value
+    co2_known = co2 is not None
     spo2_eval = metric_evals.get("spo2")
     co2_eval = metric_evals.get("cabin_co2_mmhg")
     hostile_env_score = 15.0
+    co2_text = f"{co2:.1f} mmHg CO2" if co2_known else "cabin CO2 not measured"
 
-    if spo2 < 93.0 or co2 >= 4.5 or (spo2_eval and spo2_eval.status == "CRITICAL"):
+    if spo2 < 93.0 or (co2_known and co2 >= 4.5) or (spo2_eval and spo2_eval.status == "CRITICAL"):
         hostile_env_score = 88.0
-        clinical_flags.append(f"CRITICAL: Arterial Hypoxemia / Cabin CO2 ({spo2:.1f}% SpO2, {co2:.1f} mmHg CO2).")
+        clinical_flags.append(f"CRITICAL: Arterial Hypoxemia / Cabin CO2 ({spo2:.1f}% SpO2, {co2_text}).")
         countermeasures.append(
             Countermeasure(
                 id="CM-ECLSS-O2-01",
@@ -228,9 +230,12 @@ def evaluate_multi_hazard_triage(metrics: HealthMetrics) -> TriageResult:
                 nasa_hrp_reference="NASA Space Medicine Clinical Practice Guideline #8"
             )
         )
-    elif spo2 < 96.0 or co2 >= 3.0 or (spo2_eval and spo2_eval.status == "MEDIUM"):
+    elif spo2 < 96.0 or (co2_known and co2 >= 3.0) or (spo2_eval and spo2_eval.status == "MEDIUM"):
         hostile_env_score = 45.0
-        clinical_flags.append(f"ADVISORY: Marginal blood oxygen saturation ({spo2:.1f}%).")
+        if co2_known and co2 >= 3.0:
+            clinical_flags.append(f"ADVISORY: Cabin CO2 above the 3.0 mmHg limit ({co2:.1f} mmHg), SpO2 {spo2:.1f}%.")
+        else:
+            clinical_flags.append(f"ADVISORY: Marginal blood oxygen saturation ({spo2:.1f}%).")
 
     # Overall Multi-Hazard Score
     overall_risk_score = round(
@@ -298,20 +303,5 @@ def get_current_triage_status(
     if not latest:
         return None
         
-    metrics = HealthMetrics(
-        astronaut_id=latest.astronaut_id,
-        mission_day=latest.mission_day,
-        timestamp=latest.timestamp,
-        heart_rate=latest.heart_rate,
-        bp_sys=latest.bp_sys,
-        bp_dia=latest.bp_dia,
-        spo2=latest.spo2,
-        sleep_hours=latest.sleep_hours,
-        radiation_msv=latest.radiation_msv,
-        blood_glucose=latest.blood_glucose,
-        mood_score=latest.mood_score,
-        core_temp_c=latest.core_temp_c,
-        hrv_rmssd=latest.hrv_rmssd,
-        subjective_notes=latest.subjective_notes
-    )
-    return evaluate_multi_hazard_triage(metrics)
+    from app.services.telemetry_metrics import health_metrics_from_log
+    return evaluate_multi_hazard_triage(health_metrics_from_log(db, latest))

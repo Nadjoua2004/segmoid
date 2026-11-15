@@ -27,6 +27,21 @@
       "metric_hint": "bp_sys"
     },
     {
+      "id": "bleeding",
+      "label": "Coughing, spitting or vomiting blood / uncontrolled bleeding",
+      "phrases": ["hemoptysis", "haemoptysis", "hematemesis", "blood in my urine", "blood in urine", "blood in my stool",
+                  "blood in stool", "bloody vomit", "bloody cough", "won't stop bleeding", "wont stop bleeding",
+                  "can't stop the bleeding", "cant stop the bleeding", "bleeding heavily", "bleeding a lot", "lots of blood"],
+      "patterns": [
+        "\\b(?:spit\\w*|spat|spel+\\w*|spil+\\w*|cough\\w*|vomit\\w*|throw\\w*\\s+up|threw\\s+up|puk\\w*|bring\\w*\\s+up)\\s+(?:up\\s+|out\\s+)?(?:some\\s+|a\\s+(?:bit|little|lot)\\s+of\\s+)?blood\\b",
+        "\\bblood\\s+(?:when|while|after)\\s+(?:i\\s+)?(?:cough|spit|vomit|throw)\\w*",
+        "\\b(?:urine|pee|stool|poop|spit|saliva|sputum|vomit|mucus|phlegm)\\s+(?:is\\s+|has\\s+|with\\s+|full\\s+of\\s+)?(?:some\\s+)?blood(?:y)?\\b"
+      ],
+      "guidance": "Coughing, spitting or vomiting blood, or bleeding that does not stop, is a red-flag symptom. Stop all activity and stay at rest, sitting upright, and call a crewmate to you now. Do not take any medication on your own. The crew medical officer should check heart rate, blood pressure and SpO2 and follow the onboard bleeding checklist; keep any sample (tissue) to show the CMO.",
+      "cards": ["redflag-critical-protocol"],
+      "metric_hint": "spo2"
+    },
+    {
       "id": "vision",
       "label": "Sudden vision loss",
       "phrases": ["can't see", "cant see", "cannot see", "lost my vision", "vision loss", "sudden blurry vision", "went blind", "double vision"],

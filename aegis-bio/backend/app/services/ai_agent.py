@@ -100,32 +100,41 @@ class AIAgentService:
         self._initialize_astrodoc_model()
 
     def _initialize_astrodoc_model(self):
-        """Initializes AstroDoc clinical assistant model if available."""
+        """Connects the AstroDoc AI assistant (astrodoc/backend) to this backend's real data.
+        See app/services/astrodoc_bridge.py. On failure the built-in HRP fallback answers."""
         try:
-            import sys, os
-            from pathlib import Path
-            astrodoc_base = os.path.abspath(str(Path(__file__).resolve().parents[4] / "astrodoc" / "backend"))
-            astrodoc_app = os.path.join(astrodoc_base, "app")
-            if astrodoc_base not in sys.path:
-                sys.path.insert(0, astrodoc_base)
-            if astrodoc_app not in sys.path:
-                sys.path.insert(0, astrodoc_app)
-
-            import app
-            if not hasattr(app, "knowledge"):
-                try:
-                    import knowledge
-                    app.knowledge = knowledge
-                except Exception:
-                    pass
-
-            import assistant.chain as ac
-            from assistant.data_provider import MockDataProvider
-            self.astrodoc_bot = ac.AstroDocAssistant(MockDataProvider(day=35))
-            print("[Aegis-Bio AI Agent] AstroDoc Clinical Assistant model connected.")
+            from app.services.astrodoc_bridge import build_astrodoc_assistant
+            bot = build_astrodoc_assistant()
+            llm = f"LLM {bot.model}" if bot.llm_available else "LLM offline (no key in astrodoc/backend/.env)"
+            passages = bot.kb.size          # loads the knowledge base
+            print(f"[Aegis-Bio AI Agent] AstroDoc AI connected: {llm}; knowledge base: "
+                  f"{bot.kb.backend} ({passages} passages).")
+            self.astrodoc_bot = bot
         except Exception as err:
-            print(f"[Aegis-Bio AI Agent] Note: AstroDoc chain fallback enabled: {err}")
+            import traceback
+            print(f"[Aegis-Bio AI Agent] AstroDoc AI NOT connected, using built-in fallback: {err!r}")
+            traceback.print_exc()
             self.astrodoc_bot = None
+
+    class SpeechError(Exception):
+        def __init__(self, message: str, status: int = 503):
+            super().__init__(message)
+            self.status = status
+
+    def transcribe(self, audio: bytes, filename: str = "speech.webm", content_type: Optional[str] = None) -> str:
+        """Speech -> text with AstroDoc's Whisper speech-to-text (Groq, same key as the chat model)."""
+        try:
+            from app.services.astrodoc_bridge import load_astrodoc
+            load_astrodoc()
+            from astrodoc_app.assistant.stt import SpeechToText, STTError
+        except Exception as e:
+            raise self.SpeechError(f"Voice input unavailable: AstroDoc not loaded ({e})", 503)
+        if getattr(self, "_stt", None) is None:
+            self._stt = SpeechToText()
+        try:
+            return self._stt.transcribe(audio, filename, content_type).text
+        except STTError as e:
+            raise self.SpeechError(str(e), e.status)
 
     def _initialize_vector_db(self):
         """Initializes ChromaDB vector collection with NASA HRP medical knowledge."""
@@ -201,7 +210,8 @@ class AIAgentService:
         self,
         query: str,
         context_vitals: Optional[Dict[str, Any]] = None,
-        astronaut_id: str = "ASTRO-01"
+        astronaut_id: str = "ASTRO-01",
+        history: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
         """
         Executes clinical flight surgeon reasoning loop over retrieved guidelines and astronaut vitals.
@@ -213,7 +223,10 @@ class AIAgentService:
         # 1. Try AstroDoc assistant model first if connected and if it has a substantive answer
         if self.astrodoc_bot:
             try:
-                res = self.astrodoc_bot.chat(astronaut_id, query)
+                from astrodoc_app.assistant.contracts import ChatTurn
+                turns = [ChatTurn(role=h["role"], content=h["content"]) for h in (history or [])
+                         if h.get("role") in ("user", "assistant") and h.get("content")]
+                res = self.astrodoc_bot.chat(astronaut_id, query, turns)
                 if (
                     res
                     and getattr(res, "reply", None)
@@ -221,7 +234,8 @@ class AIAgentService:
                     and len(res.reply.strip()) > 80
                 ):
                     reply_text = res.reply
-                    bot_cites = [c.title for c in (getattr(res, "citations", []) or [])]
+                    # one entry per document (a card and a passage can share the same source)
+                    bot_cites = list(dict.fromkeys(c.title for c in (getattr(res, "citations", []) or [])))
                     return {
                         "answer": reply_text,
                         "citations": bot_cites or sources,

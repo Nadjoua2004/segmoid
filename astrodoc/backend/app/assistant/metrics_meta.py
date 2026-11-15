@@ -27,6 +27,9 @@ METRICS: dict[str, dict] = {
              "warn_low": 2, "warn_high": None, "crit_low": 1, "crit_high": None, "range": (1, 5)},
     "hrv_ms": {"name": "heart-rate variability (RMSSD)", "unit": "ms", "hazard": "Isolation", "topic": "fatigue",
                "warn_low": None, "warn_high": None, "crit_low": None, "crit_high": None, "range": (5, 250)},
+    # NASA-STD-3001 Vol 2 [V2 6004]: 1-hour average ppCO2 in the habitable volume <= 3 mmHg
+    "cabin_co2": {"name": "cabin CO2", "unit": "mmHg", "hazard": "Hostile environment", "topic": "co2",
+                  "warn_low": None, "warn_high": 3.0, "crit_low": None, "crit_high": 4.5, "range": (0, 20)},
 }
 
 # Things the astronaut can report in chat that are not numeric metrics.

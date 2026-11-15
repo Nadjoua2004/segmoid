@@ -272,6 +272,28 @@ export const api = {
     return response.json();
   },
 
+  // Voice question: recorded audio -> Whisper speech-to-text -> same answer path as a typed question
+  async voiceQueryFlightSurgeon(audio: Blob, filename: string, astronautId: string): Promise<ChatMessage> {
+    const form = new FormData();
+    form.append("audio", audio, filename);
+    form.append("astronaut_id", astronautId);
+    form.append("include_current_vitals", "true");
+    const response = await fetch(`${API_BASE}/api/chat/voice`, {
+      method: "POST",
+      headers: { ...getStoredAuthHeaders() }, // no Content-Type: the browser sets the multipart boundary
+      body: form,
+    });
+    if (!response.ok) {
+      const text = await response.text();
+      let detail = text;
+      try {
+        detail = JSON.parse(text)?.detail ?? text;
+      } catch {}
+      throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    }
+    return response.json();
+  },
+
   async getChatHistory(astronautId?: string): Promise<ChatHistoryItem[]> {
     const q = astronautId ? `?astronaut_id=${encodeURIComponent(astronautId)}` : "";
     return request<ChatHistoryItem[]>(`/api/chat/history${q}`);

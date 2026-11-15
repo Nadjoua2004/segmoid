@@ -58,6 +58,13 @@ app.include_router(chat_router)
 app.include_router(otel_router)
 app.include_router(checkins_router)
 
+# AstroDoc AI full API under /api/astrodoc: chat with countermeasure cards, logged-value chips,
+# red-flag actions, voice (/api/astrodoc/chat/voice) and the auto-open greeting.
+from app.services.ai_agent import ai_agent_service  # noqa: E402
+if ai_agent_service.astrodoc_bot is not None:
+    from app.services.astrodoc_bridge import create_astrodoc_router  # noqa: E402
+    app.include_router(create_astrodoc_router(ai_agent_service.astrodoc_bot))
+
 @app.post("/v1/metrics", tags=["OpenTelemetry Collector"])
 def otel_v1_metrics(payload: dict):
     from app.services.otel_collector import otel_collector

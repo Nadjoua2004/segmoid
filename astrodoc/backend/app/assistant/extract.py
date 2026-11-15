@@ -32,6 +32,7 @@ _PATTERNS: list[tuple[str, str]] = [
     ("glucose", rf"\b(?:glucose|blood\s*sugar|sugar)\s*(?:is|was|of|at|:|=)?\s*{NUM}\b"),
     ("mood", rf"\bmood\s*(?:is|was|of|at|:|=)?\s*([1-5])(?:\s*/\s*5)?\b"),
     ("hrv_ms", rf"\bhrv\s*(?:is|was|of|at|:|=)?\s*{NUM}\s*(?:ms)?\b"),
+    ("cabin_co2", rf"\b(?:cabin\s+)?(?:co2|co₂|carbon\s+dioxide)\s*(?:level)?\s*(?:is|was|of|at|:|=)?\s*{NUM}\s*(?:mm\s*hg)?"),
     ("rad_msv", rf"\b(?:dosimeter|dose|radiation)\s*(?:reading)?\s*(?:is|was|of|at|:|=)?\s*{NUM}\s*msv\b"),
 ]
 _BP = re.compile(r"\b(?:bp|blood\s*pressure)\s*(?:is|was|of|at|:|=)?\s*(\d{2,3})\s*/\s*(\d{2,3})\b")
