@@ -4997,7 +4997,8 @@ Classifier results are ready. What is your clinical evaluation, what specific co
               aria-label="Message AstroDoc"
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
-              placeholder={isRecording ? "Listening… click ■ to send" : "Ask Astro..."}
+              placeholder={isRecording ? "Listening… click ■ to send"
+                : chatPhoto ? "Optional: ask about the photo…" : "Ask Astro..."}
               style={{
                 flex: 1,
                 height: "38px",
