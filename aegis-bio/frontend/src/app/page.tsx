@@ -1176,8 +1176,8 @@ Classifier results are ready. What is your clinical evaluation, what specific co
     setActiveScreen("overview");
   };
   const showForm = () => {
-    setIsChatOpen(false);
-    setIsModalCheckInOpen(true);
+    showPage();
+    setActiveScreen("daily-checkin");
   };
   const showChat = () => {
     setIsModalCheckInOpen(false);
@@ -1268,42 +1268,33 @@ Classifier results are ready. What is your clinical evaluation, what specific co
     },
     // --- The daily check-in form (general overview, not field by field) ---
     {
-      target: '[data-tour="checkin-title"]',
+      target: '[data-tour="checkin-header"]',
       title: "The daily check-in form",
       description:
-        "This is the form you fill in once a day. It takes about 6 minutes and keeps your health record up to date.",
+        "Fill this in once a day. Your answers update your health record and are checked by the AI health classifier.",
       placement: "bottom",
       before: showForm,
     },
     {
-      target: '[data-tour="checkin-progress"]',
-      title: "Six short sections",
+      target: '[data-tour="checkin-section"]',
+      title: "Five short sections",
       description:
-        "Vitals, sleep, activity, environment and symptoms, then a final review. The bar shows where you are; tap a section to jump to it.",
+        "Vitals, sleep and wellbeing, exercise and nutrition, habitat and radiation, then symptoms. Work through them from top to bottom.",
       placement: "bottom",
       before: showForm,
     },
     {
-      target: '[data-tour="checkin-body"]',
-      title: "Answer each section",
+      target: '[data-tour="checkin-submit"]',
+      title: "Submit your check-in",
       description:
-        "Every question is required. As you enter readings, each one is marked Nominal, Watch or Critical so problems stand out straight away.",
-      placement: "auto",
-      before: showForm,
-    },
-    {
-      target: '[data-tour="checkin-footer"]',
-      title: "Move on and submit",
-      description:
-        "Use Back and Next to move between sections. Your draft is saved on this device, so you can stop and finish later. After the review, submit to get an AI health assessment.",
+        "When you're done, submit. The AI reviews your answers and Astro, your medical assistant, opens with today's results and advice.",
       placement: "top",
       before: showForm,
     },
     {
       target: '[data-tour="chat"]',
-      title: "AstroDoc assistant",
-      description:
-        "Open the AI flight surgeon from this button, wherever you are in the app.",
+      title: "Astro, your medical assistant",
+      description: "Open Astro from this button, wherever you are in the app.",
       placement: "left",
       before: showPage,
     },
@@ -1312,7 +1303,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
       target: '[data-tour="chat-messages"]',
       title: "Your conversation",
       description:
-        "AstroDoc answers here, using NASA health guidance and your latest vitals. Sources are listed under each answer.",
+        "Astro answers here using NASA health guidance, with sources listed under each answer. After a check-in, it also uses today's results.",
       placement: "left",
       before: showChat,
     },
@@ -1901,7 +1892,8 @@ Classifier results are ready. What is your clinical evaluation, what specific co
         </header>
 
         {/* Main Screen Container */}
-        <main style={{ display: "flex", flexDirection: "column", gap: "28px", padding: "28px" }}>
+        {/* Extra bottom padding keeps the last controls (e.g. Submit) clear of the floating Astro button. */}
+        <main style={{ display: "flex", flexDirection: "column", gap: "28px", padding: "28px 28px 112px" }}>
           {/* =================================================================
               SCREEN 1: OVERVIEW
           ================================================================= */}
@@ -2697,7 +2689,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
               )}
 
               {/* Header */}
-              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "12px", borderBottom: "1px solid rgba(45, 212, 191, 0.16)", paddingBottom: "14px" }}>
+              <div data-tour="checkin-header" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "12px", borderBottom: "1px solid rgba(45, 212, 191, 0.16)", paddingBottom: "14px" }}>
                 <div>
                   <h1 style={{ margin: 0, fontSize: "16px", fontWeight: 600, color: "#F1F5F9" }}>
                     Daily Crew Check-in
@@ -2726,7 +2718,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                 style={{ display: "flex", flexDirection: "column", gap: "20px" }}
               >
                 {/* SECTION 1: Identity & Physiological Vitals */}
-                <div style={{ padding: "16px", borderRadius: "12px", background: "#131720", border: "1px solid #232B3B", display: "flex", flexDirection: "column", gap: "14px" }}>
+                <div data-tour="checkin-section" style={{ padding: "16px", borderRadius: "12px", background: "#131720", border: "1px solid #232B3B", display: "flex", flexDirection: "column", gap: "14px" }}>
                   <div style={{ fontSize: "11px", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", color: "#2DD4BF", fontFamily: "'JetBrains Mono', monospace" }}>
                     01 · Identity &amp; Physiological Vitals
                   </div>
@@ -3210,6 +3202,7 @@ Classifier results are ready. What is your clinical evaluation, what specific co
                   <span style={{ fontSize: "13px", color: "#5EEAD4" }}>{checkInFeedback}</span>
                   <button
                     type="submit"
+                    data-tour="checkin-submit"
                     disabled={isSubmittingCheckIn}
                     style={{
                       height: "42px",

@@ -77,7 +77,7 @@ export function TourWelcome({ open, onAccept, onSkip }: TourWelcomeProps) {
           </h2>
           <p id="tour-welcome-desc" className="text-bio-sm text-bio-text-secondary">
             Would you like a quick guided tour of the platform? We&apos;ll show you where everything is, from the
-            daily check-in to the AstroDoc assistant.
+            daily check-in to Astro, your medical assistant.
           </p>
         </div>
 
