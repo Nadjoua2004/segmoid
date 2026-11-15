@@ -20,6 +20,9 @@ def main():
         host=settings.HOST,
         port=settings.PORT,
         reload=settings.DEBUG,
+        # Only watch the source code. Watching the whole folder includes venv/, so installing a
+        # package restarts the server mid-request (seen with: pip install -r requirements.txt).
+        reload_dirs=["app"],
         log_level="info",
     )
 
