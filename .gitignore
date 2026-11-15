@@ -2,3 +2,6 @@
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Deployment secrets (deploy/huggingface/deploy_space.py)
+deploy/huggingface/space.secrets.env

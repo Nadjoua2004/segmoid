@@ -6,14 +6,25 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 from app.config import settings
 
-# SQLite connect_args needed for multithreading in FastAPI
-connect_args = {"check_same_thread": False} if "sqlite" in settings.DATABASE_URL else {}
+def _database_url(url: str) -> str:
+    """Supabase/Heroku-style "postgres://" URLs -> the SQLAlchemy psycopg2 dialect name."""
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg2://" + url[len("postgres://"):]
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg2://" + url[len("postgresql://"):]
+    return url
 
-engine = create_engine(
-    settings.DATABASE_URL,
-    connect_args=connect_args,
-    echo=False
-)
+
+DATABASE_URL = _database_url(settings.DATABASE_URL)
+IS_SQLITE = DATABASE_URL.startswith("sqlite")
+
+if IS_SQLITE:
+    # SQLite connect_args needed for multithreading in FastAPI
+    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False}, echo=False)
+else:
+    # Hosted Postgres (Supabase in production): drop dead pooled connections instead of failing a request
+    engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=300, pool_size=5, max_overflow=5,
+                           echo=False)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -33,7 +44,7 @@ def init_db():
     Base.metadata.create_all(bind=engine)
 
     # Lightweight migration for existing SQLite database instances
-    if "sqlite" in settings.DATABASE_URL:
+    if IS_SQLITE:
         with engine.connect() as conn:
             from sqlalchemy import text
             existing_cols = [

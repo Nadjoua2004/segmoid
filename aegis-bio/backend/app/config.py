@@ -29,6 +29,12 @@ class Settings(BaseSettings):
     # ChromaDB Vector Store for RAG
     CHROMA_PERSIST_DIR: str = str(BASE_DIR / "chroma_data")
     
+    # Production front-end address(es), comma-separated, e.g. "https://aegis-bio.vercel.app".
+    # When set, only these origins (plus localhost) may call the API; when empty, CORS stays open (local dev).
+    FRONTEND_ORIGINS: str = ""
+    # Optional regex for preview deployments, e.g. r"https://aegis-bio-.*\.vercel\.app"
+    FRONTEND_ORIGIN_REGEX: str = ""
+
     # CORS Origins (Front-end Next.js default on 3000)
     CORS_ORIGINS: list[str] = [
         "http://localhost:3000",

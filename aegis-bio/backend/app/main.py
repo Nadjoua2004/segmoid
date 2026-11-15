@@ -27,6 +27,10 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
+# Production: only the deployed front-end (FRONTEND_ORIGINS) and localhost. Local dev (not set): open.
+_frontend_origins = [o.strip().rstrip("/") for o in settings.FRONTEND_ORIGINS.split(",") if o.strip()]
+_localhost_regex = r"http://(localhost|127\.0\.0\.1)(:\d+)?"
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -34,9 +38,10 @@ app.add_middleware(
         "http://127.0.0.1:3000",
         "http://localhost:8000",
         "http://127.0.0.1:8000",
-        "*"
+        *(_frontend_origins or ["*"]),
     ],
-    allow_origin_regex=r"http://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_origin_regex=(f"{_localhost_regex}|{settings.FRONTEND_ORIGIN_REGEX}" if settings.FRONTEND_ORIGIN_REGEX
+                        else _localhost_regex),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
